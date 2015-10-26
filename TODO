@@ -1,0 +1,9 @@
+libguestfs-devel
+libguestfs-winsupport (old version only?) 1.28.1 -> needed; 1.31.X - not needed; check 1.30.X
+lvm
+
+guestfs_debug (dangerous API)
+progress bars
+shmem
+
+resize in-place

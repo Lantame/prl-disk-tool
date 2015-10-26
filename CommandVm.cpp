@@ -1,0 +1,772 @@
+///////////////////////////////////////////////////////////////////////////////
+///
+/// @file CommandVm.cpp
+///
+/// Command execution for VM disk images.
+///
+/// @author mperevedentsev
+///
+/// Copyright (c) 2005-2015 Parallels IP Holdings GmbH
+///
+/// This file is part of Virtuozzo Core. Virtuozzo Core is free
+/// software; you can redistribute it and/or modify it under the terms
+/// of the GNU General Public License as published by the Free Software
+/// Foundation; either version 2 of the License, or (at your option) any
+/// later version.
+///
+/// This program is distributed in the hope that it will be useful,
+/// but WITHOUT ANY WARRANTY; without even the implied warranty of
+/// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+/// GNU General Public License for more details.
+///
+/// You should have received a copy of the GNU General Public License
+/// along with this program; if not, write to the Free Software
+/// Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
+/// 02110-1301, USA.
+///
+/// Our contact details: Parallels IP Holdings GmbH, Vordergasse 59, 8200
+/// Schaffhausen, Switzerland.
+///
+///////////////////////////////////////////////////////////////////////////////
+#include <sys/statvfs.h>
+#include <sstream>
+#include <iomanip>
+
+#include <QFileInfo>
+
+#include "Command.h"
+#include "Util.h"
+#include "StringTable.h"
+#include "GuestFSWrapper.h"
+#include "DiskLock.h"
+
+using namespace Command;
+using namespace GuestFS;
+
+namespace
+{
+
+// String constants
+
+const char VIRT_RESIZE[] = "/usr/bin/virt-resize";
+const char VIRT_SPARSIFY[] = "/usr/bin/virt-sparsify";
+const char GUESTFISH[] = "/usr/bin/guestfish";
+
+const char TMP_IMAGE_EXT[] = ".tmp";
+
+// Numeric constants
+enum {SECTOR_SIZE = 512};
+
+// Functions
+
+// TODO: implement progress counters.
+/** Callback - output operation progress */
+/*
+bool OutputCallback(int iComplete, int iTotal, void *pParam)
+{
+	static int lastCompletion = 0;
+	bool bContinue = true;
+	(void)pParam;
+
+	if (lastCompletion != iComplete)
+	{
+		//
+		// Console output
+		//
+
+		lastCompletion = iComplete;
+
+		// Skip PRL_DISK_PROGRESS_COMPLETED. Should send it by hand, at the end of operation.
+		if (iComplete == PRL_DISK_PROGRESS_COMPLETED)
+			iComplete = PRL_DISK_PROGRESS_MAX;
+
+		int percents = (100 * iComplete) / iTotal;
+
+		printf("\r%s %u %%", "Operation progress", percents);
+		fflush(stdout);
+		if (percents >= 100)
+			printf("\n");
+
+		//
+		// Shared memory output
+		//
+
+		if (s_SharedMem != NULL)
+		{
+			if (s_Version == IMAGE_TOOL_PROTOCOL_VERSION_CURRENT)
+			{
+				struct ImageToolSharedInfo *sharedInfo = (struct ImageToolSharedInfo *) s_SharedMem->Data();
+				if (iComplete > 0)
+					// Set the progress count
+					sharedInfo->m_Completion = iComplete;
+
+				// Check do we need to cancel?
+				if (sharedInfo->m_Break)
+				{
+					// Cancel requested
+					printf("\n%s\n", "Canceling the operation...");
+					bContinue = false;
+					// NOTE: must not detach shmem here (segfault)
+				}
+			}
+			else  // handle older protocol versions here
+				Q_ASSERT_X(false, "shmem communication", "bad shared memory protocol version");
+		}
+	}
+
+	if (NeedCleanup())
+	{
+		// Cancel requested
+		printf("\n%s\n", "Canceling the operation...");
+		bContinue = false;
+		// NOTE: must not detach shmem here (segfault)
+	}
+
+	return bContinue;
+}
+*/
+
+Expected<Image::Chain> parseImageChain(const QString &path)
+{
+	QStringList args;
+	args << "info" << "--backing-chain" << "--output=json" << path;
+	QByteArray out;
+	if (run_prg(QEMU_IMG, args, &out, NULL))
+		return Expected<Image::Chain>::fromMessage("Snapshot chain is unavailable");
+
+	QString dirPath = QFileInfo(path).absolutePath();
+	Expected<Image::Chain> chain = Image::Parser(dirPath).parse(out);
+	if (chain.isOk())
+		Logger::info(chain.get().toString() + "\n");
+	return chain;
+}
+
+quint64 getAvailableSpace(const QString &path)
+{
+	struct statvfs stat;
+	statvfs(QSTR2UTF8(path), &stat);
+	return stat.f_bavail * stat.f_bsize;
+}
+
+QString getTmpImagePath(const QString &path)
+{
+	return path + TMP_IMAGE_EXT;
+}
+
+quint64 convertMbToBytes(quint64 mb)
+{
+	return mb * 1024 * 1024;
+}
+
+/** Print size using specified units */
+QString printSize(quint64 bytes, SizeUnitType unitType)
+{
+	std::ostringstream out;
+	out << std::setw(15);
+
+	switch(unitType)
+	{
+		case SIZEUNIT_b:
+			out << bytes;
+			break;
+		case SIZEUNIT_K:
+			out << qRound64(ceil(bytes/1024.)) << "K";
+			break;
+		case SIZEUNIT_M:
+			out << qRound64(ceil(bytes/1048576.)) << "M";
+			break;
+		case SIZEUNIT_G:
+			out << qRound64(ceil(bytes/1073741824.)) << "G";
+			break;
+		case SIZEUNIT_T:
+			out << qRound64(ceil(bytes/1099511627776.)) << "T";
+			break;
+		case SIZEUNIT_s:
+			out << qRound64(ceil(bytes/512.)) << " sectors";
+			break;
+		default:
+			Q_ASSERT(0);
+	}
+
+	return QString(out.str().c_str());
+}
+
+////////////////////////////////////////////////////////////
+// ResizeData
+
+struct ResizeData
+{
+	quint64 m_currentSize;
+	quint64 m_minSize;
+	quint64 m_minSizeKeepFS;
+	QString m_lastPartition;
+	bool m_fsSupported;
+
+	ResizeData(quint64 currentSize):
+		m_currentSize(currentSize), m_minSize(currentSize),
+		m_minSizeKeepFS(currentSize), m_fsSupported(true) {}
+
+	void print(const SizeUnitType &unitType) const
+	{
+		QString warnings;
+		if (m_lastPartition.isEmpty())
+			warnings.append("No partitions found\n");
+		else if (!m_fsSupported)
+			warnings.append(IDS_DISK_INFO__RESIZE_WARN_FS_NOTSUPP).append("\n");
+
+		/// Output to console
+		Logger::print(IDS_DISK_INFO__HEAD);
+		Logger::print(QString("%1%2").arg(IDS_DISK_INFO__SIZE).arg(printSize(m_currentSize, unitType)));
+		Logger::print(QString("%1%2").arg(IDS_DISK_INFO__MIN).arg(printSize(m_minSize, unitType)));
+		Logger::print(QString("%1%2").arg(IDS_DISK_INFO__MIN_KEEP_FS).arg(printSize(m_minSizeKeepFS, unitType)));
+
+		if (!warnings.isEmpty())
+			Logger::error(warnings);
+	}
+};
+
+////////////////////////////////////////////////////////////
+// ResizeHelper
+
+struct ResizeHelper
+{
+	typedef enum {RESIZE_PARTITION, NO_RESIZE_PARTITION} ResizePartition;
+	typedef enum {CLEAR_TMP_PATH, NO_CLEAR_TMP_PATH} ClearTmpPath;
+
+	ResizeHelper(const Image::Info &image,
+			const boost::optional<Call> &call = boost::optional<Call>(),
+			const boost::optional<Action> &gfsAction = boost::optional<Action>()):
+		m_image(image), m_adapter(call), m_call(call), m_gfsAction(gfsAction)
+	{
+	}
+
+	Expected<void> resizeIgnorePartition(quint64 mb) const
+	{
+		Expected<void> res = checkAvailableSpace(mb, RESIZE_PARTITION);
+		if (!res.isOk())
+			return res;
+
+		QStringList args;
+		// This is performed in-place.
+		args << "resize" << m_image.getFilename() << QString("%1M").arg(mb);
+		int ret = m_adapter.run(QEMU_IMG, args, NULL, NULL);
+		if (ret)
+		{
+			return Expected<void>::fromMessage(QString(IDS_ERR_SUBPROGRAM_RETURN_CODE)
+													   .arg(QEMU_IMG).arg(args.join(" ")).arg(ret));
+		}
+		return Expected<void>();
+	}
+
+	Expected<void> resizeConsiderPartition(quint64 mb, const QString &lastPartition, ClearTmpPath clearTmp = CLEAR_TMP_PATH)
+	{
+		Expected<void> res;
+		if (!(res = checkAvailableSpace(mb, NO_RESIZE_PARTITION)).isOk())
+			return res;
+		if (!(res = createTmpImage(mb)).isOk())
+			return res;
+		if (!(res = resizeFSIfNeeded(mb, lastPartition)).isOk())
+			return res;
+
+		QStringList args;
+		QString tmpPath = getTmpImagePath(m_image.getFilename());
+		args << (convertMbToBytes(mb) < m_image.getVirtualSize() ? "--shrink" : "--expand");
+		args << lastPartition << "--machine-readable" << "--ntfsresize-force" << m_image.getFilename() << tmpPath;
+		int ret = m_adapter.run(VIRT_RESIZE, args, NULL, NULL);
+		if (ret)
+		{
+			if (clearTmp == CLEAR_TMP_PATH)
+				m_adapter.remove(tmpPath);
+			return Expected<void>::fromMessage(QString(IDS_ERR_SUBPROGRAM_RETURN_CODE)
+											   .arg(VIRT_RESIZE).arg(args.join(" ")).arg(ret));
+		}
+		if (clearTmp == CLEAR_TMP_PATH)
+			m_adapter.rename(tmpPath, m_image.getFilename());
+		return Expected<void>();
+	}
+
+	QString getLastPartition()
+	{
+		Expected<Wrapper> gfs = getGFS();
+		if (!gfs.isOk())
+			return QString();
+
+		Expected<QString> lastPart = gfs.get().getLastPartition();
+		if (!lastPart.isOk())
+			return QString();
+		return lastPart.get();
+	}
+
+	Expected<ResizeData> getResizeData()
+	{
+		ResizeData info(m_image.getVirtualSize());
+		info.m_lastPartition = getLastPartition();
+		if (info.m_lastPartition.isEmpty())
+		{
+			info.m_minSizeKeepFS = 0;
+			return info;
+		}
+
+		Expected<Wrapper> gfs = getGFS();
+		if (!gfs.isOk())
+			return gfs;
+
+		Expected<Partition::Stats> stats = gfs.get().getPartitionStats(info.m_lastPartition);
+		if (!stats.isOk())
+			return stats;
+
+		info.m_minSizeKeepFS = stats.get().end + 1;
+		quint64 tail = info.m_currentSize - info.m_minSizeKeepFS;
+		Expected<quint64> overhead = gfs.get().getVirtResizeOverhead();
+		if (!overhead.isOk())
+			return overhead;
+
+		Expected<quint64> partMinSize = gfs.get().getPartitionMinSize(info.m_lastPartition);
+		if (!partMinSize.isOk())
+			info.m_fsSupported = false;
+		else
+		{
+			Logger::info(QString("Minimum size: %1").arg(partMinSize.get()));
+			// total_space - space_after_start_of_last_partition + min_space_needed_for_partition_and_resize
+			info.m_minSize = info.m_currentSize - (stats.get().size + tail) +
+							 partMinSize.get() + overhead.get();
+		}
+		return info;
+	}
+
+private:
+	Expected<void> createTmpImage(quint64 mb) const
+	{
+		QStringList args;
+		args << "create" << "-f" << DISK_FORMAT;
+		if (!m_image.getFullBackingFilename().isEmpty())
+		{
+			// Preserve backing image.
+			args << "-o" << QString("backing_file=%1").arg(m_image.getFullBackingFilename());
+		}
+		args << getTmpImagePath(m_image.getFilename()) << QString("%1M").arg(mb);
+		int ret = m_adapter.run(QEMU_IMG, args, NULL, NULL);
+		if (ret)
+		{
+			return Expected<void>::fromMessage(QString(IDS_ERR_SUBPROGRAM_RETURN_CODE)
+											   .arg(QEMU_IMG).arg(args.join(" ")).arg(ret));
+		}
+		return Expected<void>();
+	}
+
+	Expected<void> checkAvailableSpace(quint64 mb, ResizePartition resizePartition) const
+	{
+		qint64 delta = (qint64)convertMbToBytes(mb) - (qint64)m_image.getVirtualSize();
+		quint64 avail = getAvailableSpace(m_image.getFilename());
+		if (resizePartition == NO_RESIZE_PARTITION)
+		{
+			if (delta > 0 && (quint64)delta > avail)
+				return Expected<void>::fromMessage(QString(IDS_ERR_NO_FREE_SPACE)
+				                                   .arg(delta).arg(avail));
+			return Expected<void>();
+		}
+
+		// Heuristic estimates.
+		quint64 resultSize = m_image.getActualSize() + qMax((qint64)0, delta);
+		if (resultSize > avail)
+		{
+			return Expected<void>::fromMessage(QString(IDS_ERR_NO_FREE_SPACE)
+								   .arg(resultSize).arg(avail));
+		}
+		return Expected<void>();
+	}
+
+	Expected<void> resizeFSIfNeeded(quint64 mb, const QString &lastPartition)
+	{
+		qint64 delta = (qint64)convertMbToBytes(mb) - (qint64)m_image.getVirtualSize();
+		// GuestFS handle wrapper.
+		Expected<Wrapper> gfs = getGFS(true);
+		if (!gfs.isOk())
+			return gfs;
+		Expected<Partition::Stats> partStats = gfs.get().getPartitionStats(lastPartition);
+		if (!partStats.isOk())
+			return partStats;
+		// Free space after last partition.
+		quint64 tail = m_image.getVirtualSize() - partStats.get().end - 1;
+		Expected<quint64> overhead = gfs.get().getVirtResizeOverhead();
+		if (!overhead.isOk())
+			return overhead;
+		qint64 fsDelta = delta - overhead.get() + tail;
+		Logger::info(QString("delta: %1 overhead: %2 tail: %3 fs delta: %4")
+					 .arg(delta).arg(overhead.get()).arg(tail).arg(fsDelta));
+
+		// NB: if delta = 1M and overhead = 3M we still need to shrink FS.
+		if (fsDelta < 0)
+		{
+			// Shrinking empty space is not enough.
+			// We have to resize filesystem ourselves.
+			return gfs.get().shrinkFilesystem(lastPartition, -fsDelta);
+		}
+		return Expected<void>();
+	}
+
+	Expected<Wrapper> getGFS(bool needWrite = false)
+	{
+		if (needWrite && (!m_gfs || (m_gfs && m_gfs->isReadOnly())))
+		{
+			// create rw
+			Expected<Wrapper> gfs = Wrapper::create(
+					m_image.getFilename(), m_gfsAction);
+			if (!gfs.isOk())
+				return gfs;
+			m_gfs = gfs.get();
+		}
+		else if (!m_gfs)
+		{
+			// create ro
+			Expected<Wrapper> gfs = Wrapper::createReadOnly(
+					m_image.getFilename(), m_gfsAction);
+			if (!gfs.isOk())
+				return gfs;
+			m_gfs = gfs.get();
+		}
+		return *m_gfs;
+	}
+
+private:
+	const Image::Info &m_image;
+	CallAdapter m_adapter;
+	// Lazy-initialized.
+	boost::optional<Wrapper> m_gfs;
+	boost::optional<Call> m_call;
+	boost::optional<Action> m_gfsAction;
+};
+
+} // namespace
+
+namespace Command
+{
+namespace Visitor
+{
+
+////////////////////////////////////////////////////////////
+// Execute
+
+struct Execute: boost::static_visitor<Expected<void> >
+{
+	template <class T>
+	Expected<void> operator() (T &executor) const
+	{
+		return executor.execute();
+	}
+};
+
+////////////////////////////////////////////////////////////
+// Space
+
+struct Space: boost::static_visitor<quint64>
+{
+	Space(const Image::Info &info):
+		m_info(info)
+	{
+	}
+
+	template <class T>
+	quint64 operator() (const T &variant) const
+	{
+		return variant.getNeededSpace(m_info);
+	}
+
+private:
+	const Image::Info &m_info;
+};
+
+////////////////////////////////////////////////////////////
+// Mode
+
+struct Mode: boost::static_visitor<QString>
+{
+	template <class T>
+	QString operator() (const T &variant) const
+	{
+		return variant.getMode();
+	}
+};
+
+} // namespace Visitor
+
+////////////////////////////////////////////////////////////
+// Resize
+
+Expected<void> Resize::execute() const
+{
+	Expected<boost::shared_ptr<DiskLockGuard> > hddGuard = DiskLockGuard::openWrite(getDiskPath());
+	if (!hddGuard.isOk())
+		return hddGuard;
+	Expected<Image::Chain> result = parseImageChain(getDiskPath());
+	if (!result.isOk())
+		return result;
+	Image::Chain snapshotChain = result.get();
+	ResizeHelper resizer(snapshotChain.getList().last(), m_call, m_gfsAction);
+
+	if (convertMbToBytes(m_sizeMb) == snapshotChain.getList().last().getVirtualSize())
+		return Expected<void>();
+
+	if (!m_resizeLastPartition)
+		return resizer.resizeIgnorePartition(m_sizeMb);
+
+	QString lastPartition = resizer.getLastPartition();
+	if (lastPartition.isEmpty())
+		return resizer.resizeIgnorePartition(m_sizeMb);
+
+	return resizer.resizeConsiderPartition(m_sizeMb, lastPartition);
+}
+
+////////////////////////////////////////////////////////////
+// ResizeInfo
+
+Expected<void> ResizeInfo::execute() const
+{
+	Expected<boost::shared_ptr<DiskLockGuard> > hddGuard = DiskLockGuard::openRead(getDiskPath());
+	if (!hddGuard.isOk())
+		return hddGuard;
+	Expected<Image::Chain> result = parseImageChain(getDiskPath());
+	if (!result.isOk())
+		return result;
+	Image::Chain snapshotChain = result.get();
+	ResizeHelper resizer(snapshotChain.getList().last());
+	Expected<ResizeData> infoRes = resizer.getResizeData();
+	if (!infoRes.isOk())
+		return infoRes;
+	infoRes.get().print(m_unitType);
+	return Expected<void>();
+}
+
+////////////////////////////////////////////////////////////
+// Compact
+
+Expected<void> Compact::execute() const
+{
+	Expected<boost::shared_ptr<DiskLockGuard> > hddGuard = DiskLockGuard::openWrite(getDiskPath());
+	if (!hddGuard.isOk())
+		return hddGuard;
+	CallAdapter adapter(m_call);
+	QStringList args;
+	args << "--machine-readable" << "--in-place" << getDiskPath();
+	int ret = adapter.run(VIRT_SPARSIFY, args, NULL, NULL);
+	if (ret)
+	{
+		return Expected<void>::fromMessage(QString(IDS_ERR_SUBPROGRAM_RETURN_CODE)
+										   .arg(VIRT_SPARSIFY).arg(args.join(" ")).arg(ret));
+	}
+	return Expected<void>();
+}
+
+////////////////////////////////////////////////////////////
+// CompactInfo
+
+Expected<void> CompactInfo::execute() const
+{
+	Expected<boost::shared_ptr<DiskLockGuard> > hddGuard = DiskLockGuard::openRead(getDiskPath());
+	if (!hddGuard.isOk())
+		return hddGuard;
+	Expected<Image::Chain> result = parseImageChain(getDiskPath());
+	if (!result.isOk())
+		return result;
+	Image::Chain snapshotChain = result.get();
+
+	quint64 blockSize, size, allocated, used;
+	{
+		// GuestFS handle wrapper.
+		Expected<Wrapper> gfsRes = Wrapper::createReadOnly(
+				snapshotChain.getList().last().getFilename());
+		if (!gfsRes.isOk())
+			return gfsRes;
+		const Wrapper& gfs = gfsRes.get();
+		Expected<QStringList> partitions = gfs.getPartitions();
+		if (!partitions.isOk())
+			return partitions;
+		quint64 free = 0;
+		Q_FOREACH(const QString& part, partitions.get())
+		{
+			Expected<struct statvfs> stats = gfs.getFilesystemStats(part);
+			if (!stats.isOk())
+				return stats;
+			free += stats.get().f_bfree * stats.get().f_frsize;
+		}
+		size = snapshotChain.getList().last().getVirtualSize();
+		// Approximate: qemu-img does not provide a way to get allocated block count.
+		allocated = snapshotChain.getList().last().getActualSize();
+		used = size - free;
+		Expected<quint64> bsizeRes = gfs.getBlockSize();
+		if (!bsizeRes.isOk())
+			return bsizeRes;
+		blockSize = bsizeRes.get();
+	}
+
+	Logger::print(QString("%1%2").arg(IDS_DISK_INFO__BLOCK_SIZE).arg(blockSize / SECTOR_SIZE, 15));
+	Logger::print(QString("%1%2").arg(IDS_DISK_INFO__BLOCKS_TOTAL).arg(size / blockSize, 15));
+	Logger::print(QString("%1%2").arg(IDS_DISK_INFO__BLOCKS_ALLOCATED).arg(allocated / blockSize, 15));
+	Logger::print(QString("%1%2").arg(IDS_DISK_INFO__BLOCKS_USED).arg(used / blockSize, 15));
+	return Expected<void>();
+}
+
+namespace Merge
+{
+
+////////////////////////////////////////////////////////////
+// External
+
+Expected<void> External::checkSpace(const Image::Chain &snapshotChain) const
+{
+	quint64 avail = getAvailableSpace(getDiskPath()),
+			actualSizeSum = snapshotChain.getActualSizeSum(),
+			virtualSizeMax = snapshotChain.getVirtualSizeMax();
+
+	quint64 resultSize = qMin(actualSizeSum, virtualSizeMax);
+
+	// Base image is resized in-place.
+	quint64 delta = resultSize - snapshotChain.getList().first().getActualSize();
+
+	QString log = QString("Available: %1\nActualSum: %2\nVirtualMax: %3\nResultSize: %4\nBaseSize: %5\nBaseDiff: %6\n")
+	              .arg(avail).arg(actualSizeSum).arg(virtualSizeMax).arg(resultSize)
+	              .arg(snapshotChain.getList().first().getActualSize()).arg(delta);
+	Logger::info(log);
+
+	if (delta > avail)
+	{
+		return Expected<void>::fromMessage(QString(IDS_ERR_NO_FREE_SPACE_EXT)
+		                                   .arg(delta).arg(resultSize).arg(avail));
+	}
+	return Expected<void>();
+}
+
+Expected<void> External::doCommit(const QList<Image::Info> &chain) const
+{
+	QStringList args;
+	args << "commit" << "-b" << chain.first().getFilename() << getDiskPath();
+	int ret = m_adapter.run(QEMU_IMG, args, NULL, NULL);
+	if (ret) {
+		return Expected<void>::fromMessage(QString(IDS_ERR_SUBPROGRAM_RETURN_CODE)
+		                                   .arg(QEMU_IMG).arg(args.join(" ")).arg(ret));
+	}
+
+	m_adapter.rename(chain.first().getFilename(), getDiskPath());
+
+	// Base does not exist anymore. Preserve current image.
+	Q_FOREACH(const Image::Info &info, chain.mid(1, chain.length() - 2))
+		m_adapter.remove(info.getFilename());
+
+	return Expected<void>();
+}
+
+Expected<void> External::execute() const
+{
+	Expected<boost::shared_ptr<DiskLockGuard> > hddGuard =
+		DiskLockGuard::openWrite(getDiskPath());
+	if (!hddGuard.isOk())
+		return hddGuard;
+
+	Expected<Image::Chain> result = parseImageChain(getDiskPath());
+	if (!result.isOk())
+		return result;
+
+	Image::Chain snapshotChain = result.get();
+	if (snapshotChain.getList().length() <= 1)
+		return Expected<void>();
+
+	Expected<void> space = checkSpace(snapshotChain);
+	if (!space.isOk())
+		return space;
+
+	return doCommit(snapshotChain.getList());
+}
+
+////////////////////////////////////////////////////////////
+// Internal
+
+Expected<void> Internal::execute() const
+{
+	Expected<boost::shared_ptr<DiskLockGuard> > hddGuard = DiskLockGuard::openWrite(getDiskPath());
+	if (!hddGuard.isOk())
+		return hddGuard;
+	int ret;
+
+	QStringList args;
+	args << "snapshot" << "-l" << getDiskPath();
+	QByteArray out;
+	if ((ret = run_prg(QEMU_IMG, args, &out, NULL)))
+	{
+		return Expected<void>::fromMessage(QString(IDS_ERR_SUBPROGRAM_RETURN_CODE)
+										   .arg(QEMU_IMG).arg(args.join(" ")).arg(ret));
+	}
+
+	//                   | ID  |     TAG     | VMSIZE|   DATE                      TIME        |
+	QRegExp snapshotRE("^\\d+\\s+(\\S.*\\S)\\s+\\d+\\s+\\d{4}-\\d{2}-\\d{2}");
+	QStringList lines = QString(out).split('\n');
+	Q_FOREACH(const QString &line, lines)
+	{
+		if (snapshotRE.indexIn(line) < 0)
+			continue;
+		args.clear();
+		args << "snapshot" << "-d" << snapshotRE.cap(1) << getDiskPath();
+		if ((ret = m_adapter.run(QEMU_IMG, args, NULL, NULL)))
+		{
+			return Expected<void>::fromMessage(QString(IDS_ERR_SUBPROGRAM_RETURN_CODE)
+											   .arg(QEMU_IMG).arg(args.join(" ")).arg(ret));
+		}
+	}
+
+	return Expected<void>();
+}
+
+} // namespace Merge
+
+////////////////////////////////////////////////////////////
+// MergeSnapshots
+
+Expected<void> MergeSnapshots::execute() const
+{
+	return boost::apply_visitor(Visitor::Execute(), m_executor);
+}
+
+////////////////////////////////////////////////////////////
+// Convert
+
+Expected<void> Convert::execute() const
+{
+	CallAdapter adapter(m_call);
+	QString tmpPath = getTmpImagePath(getDiskPath());
+	Expected<boost::shared_ptr<DiskLockGuard> > hddGuard = DiskLockGuard::openWrite(getDiskPath());
+	if (!hddGuard.isOk())
+		return hddGuard;
+	Expected<Image::Chain> result = parseImageChain(getDiskPath());
+	if (!result.isOk())
+		return result;
+	Image::Chain snapshotChain = result.get();
+	// qemu-img does not support preallocation change while preserving backing chain.
+	if (snapshotChain.getList().length() > 1)
+		return Expected<void>::fromMessage(IDS_ERR_CANNOT_CONVERT_NEED_MERGE);
+
+	quint64 avail = getAvailableSpace(getDiskPath());
+
+	QStringList args;
+	quint64 needed = boost::apply_visitor(
+			Visitor::Space(snapshotChain.getList().last()), m_preallocation);
+	if (needed > avail)
+	{
+		return Expected<void>::fromMessage(QString(IDS_ERR_NO_FREE_SPACE)
+							   .arg(needed).arg(avail));
+	}
+	args << "convert" << "-O" << DISK_FORMAT << "-o"
+		 << "preallocation=" + boost::apply_visitor(Visitor::Mode(), m_preallocation)
+		 << getDiskPath() << tmpPath;
+
+	int ret = adapter.run(QEMU_IMG, args, NULL, NULL);
+	if (ret) {
+		// Remove temporary image.
+		adapter.remove(tmpPath);
+		return Expected<void>::fromMessage(QString(IDS_ERR_SUBPROGRAM_RETURN_CODE)
+										   .arg(QEMU_IMG).arg(args.join(" ")).arg(ret));
+	}
+
+	adapter.rename(tmpPath, getDiskPath());
+	return Expected<void>();
+}
+
+} // namespace Command
