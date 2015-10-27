@@ -1,7 +1,7 @@
 prl-disk-tool
 ========
 
-prl-disk-tool is an utility to manipulate virtual machine and Container disk images. 
+prl-disk-tool is an utility to manipulate virtual machine and Container disk images.
 
 It is a component of [OpenVZ](https://openvz.org/).
 
@@ -14,3 +14,9 @@ physical machine.
 
 * [How to submit a patch](https://openvz.org/How_to_submit_patches)
 * [How to contribute to OpenVZ](https://openvz.org/Contribute)
+
+### Supported filesystems
++ ext2/ext3/ext4
++ ntfs (need *libguestfs-winsupport*)
++ btrfs (need *btrfs-progs* >= 4.2)
++ xfs (need *libguestfs-xfs*)

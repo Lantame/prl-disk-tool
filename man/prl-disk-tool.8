@@ -1,0 +1,132 @@
+.TH prl-disk-tool 8  "4 August 2009" "Parallels Server"
+
+.SH NAME
+prl-disk-tool \- utility for managing Parallels virtual machine and Container disks.
+
+.SH SYNOPSIS
+prl-disk-tool [\fB\-\-help\fP] <\fICOMMAND\fP> [\fBOPTIONS\fP] \-\-hdd <\fIdisk_name\fP> [\fB\-\-comm\fP <\fImemory_name\fP>]
+.PP
+prl-disk-tool \fBresize\fP \-\-size <\fIsize\fP>[\fIM\fP|\fIG\fP] [\fB\-\-resize_partition\fP] \-\-hdd <\fIdisk_name\fP> [\fB\-\-force\fP] [\fB\-\-comm\fP <\fImemory_name\fP>]
+.PP
+prl-disk-tool \fBresize\fP \fB\-i,\-\-info\fP [\fB\-\-units\fP <\fIK\fP|\fIM\fP|\fIG\fP>] \-\-hdd <\fIdisk_name\fP> [\fB\-\-comm\fP <\fImemory_name\fP>]
+.PP
+prl-disk-tool \fBcompact\fP \-\-hdd <\fIdisk_name\fP> [\fB\-\-force\fP] [\fB\-\-comm\fP <\fImemory_name\fP>]
+.PP
+prl-disk-tool \fBcompact\fP \fB\-i,\-\-info\fP \-\-hdd <\fIdisk_name\fP> [\fB\-\-comm\fP <\fImemory_name\fP>]
+.PP
+prl-disk-tool \fBmerge\fP \-\-hdd <\fIdisk_name\fP> [\fB\-\-external\fP]
+.PP
+prl-disk-tool \fBconvert\fP \-\-hdd <\fIdisk_name\fP> <\fB\-\-expanding|\-\-plain\fP>
+.PP
+prl-disk-tool \fB\-\-help\fP
+
+.SH DESCRIPTION
+The prl-disk-tool utility is used to manage virtual disks.
+
+.SH COMMANDS
+.IP \fBresize\fP 4
+Changes the capacity of the specified virtual disk. During resizing, all data present on the disk volumes are left intact.
+You can also resize the last partition using the \fB\-\-resize_partition\fP option. The supported file systems are NTFS, ext2/ext3/ext4, btrfs, xfs.
+.IP \fBcompact\fP 4
+Removes all empty blocks from expanding virtual disks and reduces their size on your real disk.
+Compacting is performed by scanning file systems for unused clusters,
+zeroing and discarding corresponding disk blocks. The supported file systems are NTFS, ext2/ext3/ext4, btrfs, xfs.
+.IP \fBmerge\fP 4
+Merges all snapshots of the virtual hard disk. By default, merges internal snapshots. Use \fB\-\-external\fP to merge external snapshots.
+.IP \fBconvert\fP 4
+Converts the virtual hard disk into another format (plain or expanding).
+.BR
+
+.SH OPTIONS
+
+.SS Common options:
+The following options can be used with the majority of prl-disk-tool commands.
+.TP
+\fB\-\-hdd\fP <\fIdisk_name\fP>
+This option is mandatory and specifies the full path to the disk to be configured or compacted.
+.TP
+\fB\-v,\-\-verbose\fP
+Verbose mode: print actions performed and status information.
+.TP
+\fB\-n,\-\-dry\-run\fP
+Do not actually do anything (useful with \fB\-n\fP).
+.TP
+\fB\-\-comm\fP <\fImemory_name\fP>
+This parameter is not currently used.
+
+.SS Disk resizing:
+.TP
+\fB\-\-size\fP <\fIsize\fP>[\fIM\fP|\fIG\fP]
+Set the virtual hard disk size in MB (by default) or GB.
+.TP
+\fB\-\-resize_partition\fP
+Resize the last partition and its file system while resizing the disk. The supported file system types are NTFS, ext2/ext3/ext4, btrfs, xfs.
+.TP
+\fB\-\-force\fP
+Forcibly drop the suspended state before resizing the disk (ignored).
+.TP
+\fB\-i,\-\-info\fP
+Display the capacity of the specified virtual disk as it is seen from inside the virtual machine or Container, without
+resizing the disk. The information is shown as a table with the following columns:
+
+.br
+\fBSize:                <size>M\fP
+       The current virtual disk capacity.
+.br
+\fBMinimum:             <size>M\fP
+       The minimum possible capacity of the virtual disk after resizing the disk using the \fB\-\-resize_partition\fP option.
+.br
+\fBMinimum:             <size>M  (without resizing the last partition)\fP
+       The minimum possible capacity of the virtual disk after resizing the disk without using the \fB\-\-resize_partition\fP option.
+
+Keep in mind that for an expanding virtual disk the capacity shown from inside the virtual machine and the
+size the disk occupies on the real physical disk may differ.
+.TP
+\fB\-\-units\fP <\fIK\fP|\fIM\fP|\fIG\fP>
+Used with the \fB\-\-info\fP option, shows the disk size in KB, MB, or GB.
+
+.SS Disk compacting:
+.TP
+\fB\-\-force\fP
+Forcibly drop the suspended state before resizing the disk (ignored).
+.TP
+\fB\-i,\-\-info\fP
+Show the estimated disk size after the compaction without compacting the disk. The results will be shown as:
+
+.br
+\fBBlock size:                       <size>\fP
+       Block size, in sectors. Each sector is 512 bytes.
+.br
+\fBTotal blocks:            <sectors_count>\fP
+       Total blocks in the disk image (according to the virtual disk image capacity).
+.br
+\fBAllocated blocks:        <sectors_count>\fP
+       The number of blocks that are actually allocated to and keeping space on your hard drive.
+.br
+\fBUsed blocks:             <sectors_count>\fP
+       The number of blocks actually used in the disk image. This number of blocks will be left after compacting the disk.
+.SS Snapshot merge
+.TP
+\fB\-\-external\fP
+Merge \fBexternal\fP snapshots instead of \fBinternal\fP (by default).
+
+eSS Conversion
+.TP
+\fB\-\-expanding\fP
+reduce the size of a plain disk to the actual amount of data stored on it and make it expandable allowing it to grow in size as the amount of data grows.
+.TP
+\fB\-\-plain\fP
+convert an expandable disk to a disk of fixed capacity that cannot grow in size.
+.SS Other:
+.TP
+\fB\-\-help\fP
+Print usage.
+
+.SH AUTHOR
+Parallels Holdings, Ltd. and its affiliates.
+http://www.parallels.com
+.br
+.SH SEE ALSO
+.BR prlctl (8), qemu-img (1), guestfs (3), virt-sparsify (1), virt-resize (1)
+.SH COPYRIGHT
+Copyright (C) 2005\-2015 Parallels Holdings, Ltd. and its affiliates.
