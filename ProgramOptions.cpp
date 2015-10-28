@@ -123,7 +123,7 @@ void OptionParser::printUsage(const po::options_description &options) const
 {
 	po::options_description usage;
 	usage.add(po::options_description(
-				"Usage:\n\tprl-disk-tool <operation> [<arguments>]"));
+				"Usage:\n\tprl_disk_tool <operation> [<arguments>]"));
 
 	po::options_description generic("Generic options");
 	generic.add_options()

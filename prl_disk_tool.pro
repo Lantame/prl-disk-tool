@@ -26,6 +26,15 @@ SOURCES += main.cpp \
            ProgramOptions.cpp \
            StringTable.cpp
 
+
+LINKNAME = prl-disk-tool
+link.files = $$LINKNAME
+
+QMAKE_POST_LINK = $(SYMLINK) $$TARGET $$LINKNAME
+
 target.path = /usr/sbin/
+link.path = /usr/sbin/
+
 INSTALLS += target
+INSTALLS += link
 

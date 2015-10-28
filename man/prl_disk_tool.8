@@ -1,27 +1,27 @@
-.TH prl-disk-tool 8  "25 October 2015" "Virtuozzo"
+.TH prl_disk_tool 8  "25 October 2015" "Virtuozzo"
 
 .SH NAME
-prl-disk-tool \- utility for managing virtual machine and Container disks.
+prl_disk_tool \- utility for managing virtual machine and Container disks.
 
 .SH SYNOPSIS
-prl-disk-tool [\fB\-\-help\fP] <\fICOMMAND\fP> [\fBOPTIONS\fP] \-\-hdd <\fIdisk_name\fP> [\fB\-\-comm\fP <\fImemory_name\fP>]
+prl_disk_tool [\fB\-\-help\fP] <\fICOMMAND\fP> [\fBOPTIONS\fP] \-\-hdd <\fIdisk_name\fP> [\fB\-\-comm\fP <\fImemory_name\fP>]
 .PP
-prl-disk-tool \fBresize\fP \-\-size <\fIsize\fP>[\fIK\fP|\fIM\fP|\fIG\fP|\fIT\fP] [\fB\-\-resize_partition\fP] \-\-hdd <\fIdisk_name\fP> [\fB\-\-force\fP] [\fB\-\-comm\fP <\fImemory_name\fP>]
+prl_disk_tool \fBresize\fP \-\-size <\fIsize\fP>[\fIK\fP|\fIM\fP|\fIG\fP|\fIT\fP] [\fB\-\-resize_partition\fP] \-\-hdd <\fIdisk_name\fP> [\fB\-\-force\fP] [\fB\-\-comm\fP <\fImemory_name\fP>]
 .PP
-prl-disk-tool \fBresize\fP \fB\-i,\-\-info\fP [\fB\-\-units\fP <\fIK\fP|\fIM\fP|\fIG\fP|\fIT\fP>] \-\-hdd <\fIdisk_name\fP> [\fB\-\-comm\fP <\fImemory_name\fP>]
+prl_disk_tool \fBresize\fP \fB\-i,\-\-info\fP [\fB\-\-units\fP <\fIK\fP|\fIM\fP|\fIG\fP|\fIT\fP>] \-\-hdd <\fIdisk_name\fP> [\fB\-\-comm\fP <\fImemory_name\fP>]
 .PP
-prl-disk-tool \fBcompact\fP \-\-hdd <\fIdisk_name\fP> [\fB\-\-force\fP] [\fB\-\-comm\fP <\fImemory_name\fP>]
+prl_disk_tool \fBcompact\fP \-\-hdd <\fIdisk_name\fP> [\fB\-\-force\fP] [\fB\-\-comm\fP <\fImemory_name\fP>]
 .PP
-prl-disk-tool \fBcompact\fP \fB\-i,\-\-info\fP \-\-hdd <\fIdisk_name\fP> [\fB\-\-comm\fP <\fImemory_name\fP>]
+prl_disk_tool \fBcompact\fP \fB\-i,\-\-info\fP \-\-hdd <\fIdisk_name\fP> [\fB\-\-comm\fP <\fImemory_name\fP>]
 .PP
-prl-disk-tool \fBmerge\fP \-\-hdd <\fIdisk_name\fP> [\fB\-\-external\fP]
+prl_disk_tool \fBmerge\fP \-\-hdd <\fIdisk_name\fP> [\fB\-\-external\fP]
 .PP
-prl-disk-tool \fBconvert\fP \-\-hdd <\fIdisk_name\fP> <\fB\-\-expanding|\-\-plain\fP>
+prl_disk_tool \fBconvert\fP \-\-hdd <\fIdisk_name\fP> <\fB\-\-expanding|\-\-plain\fP>
 .PP
-prl-disk-tool \fB\-\-help\fP
+prl_disk_tool \fB\-\-help\fP
 
 .SH DESCRIPTION
-The prl-disk-tool utility is used to manage virtual disks.
+The prl_disk_tool utility is used to manage virtual disks.
 
 .SH COMMANDS
 .IP \fBresize\fP 4
@@ -40,7 +40,7 @@ Converts the virtual hard disk into another format (plain or expanding).
 .SH OPTIONS
 
 .SS Common options:
-The following options can be used with the majority of prl-disk-tool commands.
+The following options can be used with the majority of prl_disk_tool commands.
 .TP
 \fB\-\-hdd\fP <\fIdisk_name\fP>
 This option is mandatory and specifies the full path to the disk to be configured or compacted.
