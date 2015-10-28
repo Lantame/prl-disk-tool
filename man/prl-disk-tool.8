@@ -1,14 +1,14 @@
-.TH prl-disk-tool 8  "4 August 2009" "Parallels Server"
+.TH prl-disk-tool 8  "25 October 2015" "Virtuozzo"
 
 .SH NAME
-prl-disk-tool \- utility for managing Parallels virtual machine and Container disks.
+prl-disk-tool \- utility for managing virtual machine and Container disks.
 
 .SH SYNOPSIS
 prl-disk-tool [\fB\-\-help\fP] <\fICOMMAND\fP> [\fBOPTIONS\fP] \-\-hdd <\fIdisk_name\fP> [\fB\-\-comm\fP <\fImemory_name\fP>]
 .PP
-prl-disk-tool \fBresize\fP \-\-size <\fIsize\fP>[\fIM\fP|\fIG\fP] [\fB\-\-resize_partition\fP] \-\-hdd <\fIdisk_name\fP> [\fB\-\-force\fP] [\fB\-\-comm\fP <\fImemory_name\fP>]
+prl-disk-tool \fBresize\fP \-\-size <\fIsize\fP>[\fIK\fP|\fIM\fP|\fIG\fP|\fIT\fP] [\fB\-\-resize_partition\fP] \-\-hdd <\fIdisk_name\fP> [\fB\-\-force\fP] [\fB\-\-comm\fP <\fImemory_name\fP>]
 .PP
-prl-disk-tool \fBresize\fP \fB\-i,\-\-info\fP [\fB\-\-units\fP <\fIK\fP|\fIM\fP|\fIG\fP>] \-\-hdd <\fIdisk_name\fP> [\fB\-\-comm\fP <\fImemory_name\fP>]
+prl-disk-tool \fBresize\fP \fB\-i,\-\-info\fP [\fB\-\-units\fP <\fIK\fP|\fIM\fP|\fIG\fP|\fIT\fP>] \-\-hdd <\fIdisk_name\fP> [\fB\-\-comm\fP <\fImemory_name\fP>]
 .PP
 prl-disk-tool \fBcompact\fP \-\-hdd <\fIdisk_name\fP> [\fB\-\-force\fP] [\fB\-\-comm\fP <\fImemory_name\fP>]
 .PP
@@ -46,18 +46,18 @@ The following options can be used with the majority of prl-disk-tool commands.
 This option is mandatory and specifies the full path to the disk to be configured or compacted.
 .TP
 \fB\-v,\-\-verbose\fP
-Verbose mode: print actions performed and status information.
+Verbose mode: print actions performed and status information (useful with \fB\-n\fP).
 .TP
 \fB\-n,\-\-dry\-run\fP
-Do not actually do anything (useful with \fB\-n\fP).
+Do not actually do anything.
 .TP
 \fB\-\-comm\fP <\fImemory_name\fP>
 This parameter is not currently used.
 
 .SS Disk resizing:
 .TP
-\fB\-\-size\fP <\fIsize\fP>[\fIM\fP|\fIG\fP]
-Set the virtual hard disk size in MB (by default) or GB.
+\fB\-\-size\fP <\fIsize\fP>[\fIK\fP|\fIM\fP|\fIG\fP|\fIT\fP]
+Set the virtual hard disk size in KB, MB (by default), GB or TB (this number is rounded up to MB).
 .TP
 \fB\-\-resize_partition\fP
 Resize the last partition and its file system while resizing the disk. The supported file system types are NTFS, ext2/ext3/ext4, btrfs, xfs.
@@ -82,13 +82,13 @@ resizing the disk. The information is shown as a table with the following column
 Keep in mind that for an expanding virtual disk the capacity shown from inside the virtual machine and the
 size the disk occupies on the real physical disk may differ.
 .TP
-\fB\-\-units\fP <\fIK\fP|\fIM\fP|\fIG\fP>
-Used with the \fB\-\-info\fP option, shows the disk size in KB, MB, or GB.
+\fB\-\-units\fP <\fIK\fP|\fIM\fP|\fIG\fP|\fIT\fP>
+Used with the \fB\-\-info\fP option, shows the disk size in KB, MB, GB or TB.
 
 .SS Disk compacting:
 .TP
 \fB\-\-force\fP
-Forcibly drop the suspended state before resizing the disk (ignored).
+Forcibly drop the suspended state before compacting the disk (ignored).
 .TP
 \fB\-i,\-\-info\fP
 Show the estimated disk size after the compaction without compacting the disk. The results will be shown as:
@@ -110,7 +110,7 @@ Show the estimated disk size after the compaction without compacting the disk. T
 \fB\-\-external\fP
 Merge \fBexternal\fP snapshots instead of \fBinternal\fP (by default).
 
-eSS Conversion
+.SS Conversion
 .TP
 \fB\-\-expanding\fP
 reduce the size of a plain disk to the actual amount of data stored on it and make it expandable allowing it to grow in size as the amount of data grows.
@@ -119,7 +119,7 @@ reduce the size of a plain disk to the actual amount of data stored on it and ma
 convert an expandable disk to a disk of fixed capacity that cannot grow in size.
 .SS Other:
 .TP
-\fB\-\-help\fP
+\fB\-\-help\fP [\fB\-\-usage\fP]
 Print usage.
 
 .SH AUTHOR
