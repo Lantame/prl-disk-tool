@@ -27,14 +27,12 @@ SOURCES += main.cpp \
            StringTable.cpp
 
 
-LINKNAME = prl-disk-tool
-link.files = $$LINKNAME
-
-QMAKE_POST_LINK = $(SYMLINK) $$TARGET $$LINKNAME
-
 target.path = /usr/sbin/
-link.path = /usr/sbin/
-
 INSTALLS += target
-INSTALLS += link
 
+LINKNAME = prl-disk-tool
+
+link.commands = $(SYMLINK) $$TARGET $(INSTALL_ROOT)$${target.path}$$LINKNAME
+link.uninstall = -$(DEL_FILE) $${target.path}$$LINKNAME
+link.path = /usr/sbin
+INSTALLS += link
