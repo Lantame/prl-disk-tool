@@ -3,7 +3,7 @@
 /// @file StringTable.h
 ///
 /// This file contains all text strings which
-///     are used in prl-disk-tool utility
+///     are used in prl_disk_tool utility
 ///     are visible for customer
 ///
 /// @modifier mperevedentsev

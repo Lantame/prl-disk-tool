@@ -2,7 +2,7 @@
 ///
 /// @file main.cpp
 ///
-/// prl-disk-tool entry point and initialization
+/// prl_disk_tool entry point and initialization
 ///
 /// @author mperevedentsev
 ///
