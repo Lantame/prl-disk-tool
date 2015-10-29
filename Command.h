@@ -222,35 +222,48 @@ namespace Preallocation
 {
 
 ////////////////////////////////////////////////////////////
-// Plain
-
-struct Plain
-{
-	static quint64 getNeededSpace(const Image::Info &info)
-	{
-		return info.getVirtualSize();
-	}
-
-	static QString getMode()
-	{
-		return "falloc";
-	}
-};
-
-////////////////////////////////////////////////////////////
 // Expanding
 
-struct Expanding
+struct Expanding: DiskAware
 {
+	Expanding(const DiskAware &disk, const boost::optional<Call> &call):
+		DiskAware(disk), m_call(call)
+	{
+	}
+
 	static quint64 getNeededSpace(const Image::Info &info)
 	{
 		return info.getActualSize();
 	}
 
-	static QString getMode()
+	Expected<void> rename(const QString &tmpPath) const;
+
+protected:
+	const boost::optional<Call>& getCall() const
 	{
-		return "off";
+		return m_call;
 	}
+
+private:
+	boost::optional<Call> m_call;
+};
+
+////////////////////////////////////////////////////////////
+// Plain
+
+struct Plain: Expanding
+{
+	Plain(const DiskAware &disk, const boost::optional<Call> &call):
+		Expanding(disk, call)
+	{
+	}
+
+	static quint64 getNeededSpace(const Image::Info &info)
+	{
+		return info.getVirtualSize();
+	}
+
+	Expected<void> allocate(const QString &tmpPath, quint64 size) const;
 };
 
 } // namespace Preallocation

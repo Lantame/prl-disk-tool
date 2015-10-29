@@ -397,9 +397,9 @@ Expected<Convert> Factory<Convert>::operator()() const
 				"Either --plain or --expanding must be specified");
 	}
 	else if (plain)
-		return Convert(disk.get(), Preallocation::Plain(), m_call);
+		return Convert(disk.get(), Preallocation::Plain(disk.get(), m_call), m_call);
 	else
-		return Convert(disk.get(), Preallocation::Expanding(), m_call);
+		return Convert(disk.get(), Preallocation::Expanding(disk.get(), m_call), m_call);
 }
 
 } // namespace Command
