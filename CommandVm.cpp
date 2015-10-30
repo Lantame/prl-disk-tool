@@ -31,6 +31,7 @@
 #include <sys/statvfs.h>
 #include <sstream>
 #include <iomanip>
+#include <fcntl.h>
 
 #include <QFileInfo>
 
@@ -477,15 +478,76 @@ private:
 };
 
 ////////////////////////////////////////////////////////////
-// Mode
+// PreConvert
 
-struct Mode: boost::static_visitor<QString>
+struct PreConvert
 {
-	template <class T>
-	QString operator() (const T &variant) const
+	PreConvert(const CallAdapter &adapter):
+		m_adapter(adapter)
 	{
-		return variant.getMode();
 	}
+
+	Expected<QString> operator()(const QString &path, const QString &mode) const
+	{
+		QString tmpPath = getTmpImagePath(path);
+		QStringList args;
+		args << "convert" << "-O" << DISK_FORMAT << "-o"
+			 << "preallocation=" + mode
+			 << path << tmpPath;
+
+		int ret = m_adapter.run(QEMU_IMG, args, NULL, NULL);
+		if (ret)
+		{
+			// Remove temporary image.
+			m_adapter.remove(tmpPath);
+			return Expected<QString>::fromMessage(QString(IDS_ERR_SUBPROGRAM_RETURN_CODE)
+											      .arg(QEMU_IMG).arg(args.join(" ")).arg(ret));
+		}
+		return tmpPath;
+	}
+
+private:
+	CallAdapter m_adapter;
+};
+
+////////////////////////////////////////////////////////////
+// Convert
+
+struct Convert: boost::static_visitor<Expected<void> >
+{
+	Convert(const Image::Info &info, const boost::optional<Call> &call):
+		m_info(info), m_adapter(call), m_preConv(m_adapter)
+	{
+	}
+
+	Expected<void> operator()(const Preallocation::Plain &mode) const
+	{
+		Expected<QString> tmpPath = m_preConv(mode.getDiskPath(), "off");
+		if (!tmpPath.isOk())
+			return tmpPath;
+
+		Expected<void> alloc = mode.allocate(tmpPath.get(), m_info.getVirtualSize());
+		if (!alloc.isOk())
+		{
+			m_adapter.remove(tmpPath.get());
+			return alloc;
+		}
+
+		return mode.rename(tmpPath.get());
+	}
+
+	Expected<void> operator()(const Preallocation::Expanding &mode) const
+	{
+		Expected<QString> tmpPath = m_preConv(mode.getDiskPath(), "metadata");
+		if (!tmpPath.isOk())
+			return tmpPath;
+		return mode.rename(tmpPath.get());
+	}
+
+private:
+	Image::Info m_info;
+	CallAdapter m_adapter;
+	PreConvert m_preConv;
 };
 
 } // namespace Visitor
@@ -725,13 +787,44 @@ Expected<void> MergeSnapshots::execute() const
 	return boost::apply_visitor(Visitor::Execute(), m_executor);
 }
 
+namespace Preallocation
+{
+
+////////////////////////////////////////////////////////////
+// Plain
+
+Expected<void> Plain::allocate(const QString &path, quint64 size) const
+{
+	Logger::info(QString("posix_fallocate(open(%1), 0, %2)").arg(path).arg(size));
+	if (!getCall())
+		return Expected<void>();
+
+	QFile file(path);
+	if (!file.open(QIODevice::ReadWrite))
+		return Expected<void>::fromMessage("Cannot open temporary image");
+	int ret = posix_fallocate(file.handle(), 0, size);
+	file.close();
+	if (ret)
+		return Expected<void>::fromMessage("Cannot posix_fallocate() image");
+	return Expected<void>();
+}
+
+////////////////////////////////////////////////////////////
+// Expanding
+
+Expected<void> Expanding::rename(const QString &tmpPath) const
+{
+	CallAdapter(m_call).rename(tmpPath, getDiskPath());
+	return Expected<void>();
+}
+
+} // namespace Preallocation
+
 ////////////////////////////////////////////////////////////
 // Convert
 
 Expected<void> Convert::execute() const
 {
-	CallAdapter adapter(m_call);
-	QString tmpPath = getTmpImagePath(getDiskPath());
 	Expected<boost::shared_ptr<DiskLockGuard> > hddGuard = DiskLockGuard::openWrite(getDiskPath());
 	if (!hddGuard.isOk())
 		return hddGuard;
@@ -744,8 +837,6 @@ Expected<void> Convert::execute() const
 		return Expected<void>::fromMessage(IDS_ERR_CANNOT_CONVERT_NEED_MERGE);
 
 	quint64 avail = getAvailableSpace(getDiskPath());
-
-	QStringList args;
 	quint64 needed = boost::apply_visitor(
 			Visitor::Space(snapshotChain.getList().last()), m_preallocation);
 	if (needed > avail)
@@ -753,20 +844,9 @@ Expected<void> Convert::execute() const
 		return Expected<void>::fromMessage(QString(IDS_ERR_NO_FREE_SPACE)
 							   .arg(needed).arg(avail));
 	}
-	args << "convert" << "-O" << DISK_FORMAT << "-o"
-		 << "preallocation=" + boost::apply_visitor(Visitor::Mode(), m_preallocation)
-		 << getDiskPath() << tmpPath;
 
-	int ret = adapter.run(QEMU_IMG, args, NULL, NULL);
-	if (ret) {
-		// Remove temporary image.
-		adapter.remove(tmpPath);
-		return Expected<void>::fromMessage(QString(IDS_ERR_SUBPROGRAM_RETURN_CODE)
-										   .arg(QEMU_IMG).arg(args.join(" ")).arg(ret));
-	}
-
-	adapter.rename(tmpPath, getDiskPath());
-	return Expected<void>();
+	return boost::apply_visitor(Visitor::Convert(
+				snapshotChain.getList().last(), m_call), m_preallocation);
 }
 
 } // namespace Command
