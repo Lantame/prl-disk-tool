@@ -69,6 +69,7 @@ OptionParser::OptionParser()
 		("help,h", "Produce help message")
 		("usage", "Produce help message")
 		("verbose,v", "Enable information messages")
+		("comm", po::value<std::string>(), "Shared memory name")
 		("operation", po::value<std::string>(), "Operation to perform")
 		("subargs", po::value<std::vector<std::string> >(), "Arguments for operation")
 		;
@@ -130,6 +131,7 @@ void OptionParser::printUsage(const po::options_description &options) const
 		("help,h", "Produce help message")
 		("usage", "Produce help message")
 		("verbose,v", "Enable information messages")
+		("comm", po::value<std::string>(), "Shared memory name (currently unused)")
 		;
 	usage.add(generic);
 
