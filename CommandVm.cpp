@@ -243,7 +243,7 @@ struct ResizeHelper
 
 	Expected<void> resizeIgnorePartition(quint64 mb) const
 	{
-		Expected<void> res = checkAvailableSpace(mb, RESIZE_PARTITION);
+		Expected<void> res = checkAvailableSpace(mb, NO_RESIZE_PARTITION);
 		if (!res.isOk())
 			return res;
 
@@ -262,7 +262,7 @@ struct ResizeHelper
 	Expected<void> resizeConsiderPartition(quint64 mb, const QString &lastPartition, ClearTmpPath clearTmp = CLEAR_TMP_PATH)
 	{
 		Expected<void> res;
-		if (!(res = checkAvailableSpace(mb, NO_RESIZE_PARTITION)).isOk())
+		if (!(res = checkAvailableSpace(mb, RESIZE_PARTITION)).isOk())
 			return res;
 		if (!(res = createTmpImage(mb)).isOk())
 			return res;
@@ -361,13 +361,15 @@ private:
 		quint64 avail = getAvailableSpace(m_image.getFilename());
 		if (resizePartition == NO_RESIZE_PARTITION)
 		{
+			// We resize in-place, so we should consider only additional space.
 			if (delta > 0 && (quint64)delta > avail)
 				return Expected<void>::fromMessage(QString(IDS_ERR_NO_FREE_SPACE)
 				                                   .arg(delta).arg(avail));
 			return Expected<void>();
 		}
 
-		// Heuristic estimates.
+		// Heuristic estimates: we create a copy of image.
+		// It should be at most <delta> larger than original.
 		quint64 resultSize = m_image.getActualSize() + qMax((qint64)0, delta);
 		if (resultSize > avail)
 		{
@@ -703,7 +705,8 @@ Expected<void> External::doCommit(const QList<Image::Info> &chain) const
 	QStringList args;
 	args << "commit" << "-b" << chain.first().getFilename() << getDiskPath();
 	int ret = m_adapter.run(QEMU_IMG, args, NULL, NULL);
-	if (ret) {
+	if (ret)
+	{
 		return Expected<void>::fromMessage(QString(IDS_ERR_SUBPROGRAM_RETURN_CODE)
 		                                   .arg(QEMU_IMG).arg(args.join(" ")).arg(ret));
 	}
