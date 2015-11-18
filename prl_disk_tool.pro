@@ -13,7 +13,8 @@ HEADERS += GuestFSWrapper.h \
            Util.h \
            Expected.h \
            ProgramOptions.h \
-           StringTable.h
+           StringTable.h \
+           Errors.h
 
 SOURCES += main.cpp \
            GuestFSWrapper.cpp \
