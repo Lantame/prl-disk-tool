@@ -43,7 +43,7 @@
  */
 bool DiskLock::lock(const QString& path, int mode)
 {
-	Logger::info("Disk lock");
+	Logger::info(QString("Disk lock: %1").arg(path));
 
 	m_file.reset(new QFile(path));
 	if (!m_file->open(QIODevice::ReadWrite))

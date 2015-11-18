@@ -552,6 +552,49 @@ private:
 	PreConvert m_preConv;
 };
 
+namespace Merge
+{
+
+struct External: boost::static_visitor<Expected<void> >
+{
+	External(const Image::Chain &snapshotChain, const CallAdapter &adapter):
+	   m_snapshotChain(snapshotChain), m_adapter(adapter)
+	{
+	}
+
+	template <class T>
+	Expected<void> operator()(const T &mode) const
+	{
+		QList<Image::Info> chain = m_snapshotChain.getList();
+		quint64 avail = getAvailableSpace(chain.first().getFilename()),
+				delta = mode.getNeededSpace(m_snapshotChain);
+
+		if (delta > avail)
+		{
+			return Expected<void>::fromMessage(QString(IDS_ERR_NO_FREE_SPACE)
+											   .arg(delta).arg(avail));
+		}
+
+		Expected<void> res = mode.doCommit(chain);
+		if (!res.isOk())
+			return res;
+
+		m_adapter.rename(chain.first().getFilename(), chain.last().getFilename());
+
+		// Base does not exist anymore. Preserve current image.
+		Q_FOREACH(const Image::Info &info, chain.mid(1, chain.length() - 2))
+			m_adapter.remove(info.getFilename());
+
+		return Expected<void>();
+	}
+
+private:
+	const Image::Chain &m_snapshotChain;
+	CallAdapter m_adapter;
+};
+
+} // namespace Merge
+
 } // namespace Visitor
 
 ////////////////////////////////////////////////////////////
@@ -672,55 +715,78 @@ Expected<void> CompactInfo::execute() const
 
 namespace Merge
 {
+namespace External
+{
 
 ////////////////////////////////////////////////////////////
-// External
+// Direct
 
-Expected<void> External::checkSpace(const Image::Chain &snapshotChain) const
+quint64 Direct::getNeededSpace(const Image::Chain &snapshotChain) const
 {
-	quint64 avail = getAvailableSpace(getDiskPath()),
-			actualSizeSum = snapshotChain.getActualSizeSum(),
-			virtualSizeMax = snapshotChain.getVirtualSizeMax();
-
-	quint64 resultSize = qMin(actualSizeSum, virtualSizeMax);
-
-	// Base image is resized in-place.
-	quint64 delta = resultSize - snapshotChain.getList().first().getActualSize();
-
-	QString log = QString("Available: %1\nActualSum: %2\nVirtualMax: %3\nResultSize: %4\nBaseSize: %5\nBaseDiff: %6\n")
-	              .arg(avail).arg(actualSizeSum).arg(virtualSizeMax).arg(resultSize)
-	              .arg(snapshotChain.getList().first().getActualSize()).arg(delta);
-	Logger::info(log);
-
-	if (delta > avail)
+	quint64	virtualSizeMax = snapshotChain.getVirtualSizeMax();
+	const QList<Image::Info> chain = snapshotChain.getList();
+	// A'[n] = A[n]
+	quint64 delta = 0, prevActualSize = chain.last().getActualSize();
+	for (int i = chain.length() - 2; i >= 0; --i)
 	{
-		return Expected<void>::fromMessage(QString(IDS_ERR_NO_FREE_SPACE_EXT)
-		                                   .arg(delta).arg(resultSize).arg(avail));
+		// A'[i] = Min(V, Sum(A[i], A'[i+1]))
+		quint64 actualSize = qMin(virtualSizeMax, chain[i].getActualSize() + prevActualSize);
+		delta += actualSize - chain[i].getActualSize();
+		prevActualSize = actualSize;
 	}
-	return Expected<void>();
+	return delta;
 }
 
-Expected<void> External::doCommit(const QList<Image::Info> &chain) const
+Expected<void> Direct::doCommit(const QList<Image::Info> &chain) const
 {
+	int ret;
 	QStringList args;
-	args << "commit" << "-b" << chain.first().getFilename() << getDiskPath();
-	int ret = m_adapter.run(QEMU_IMG, args, NULL, NULL);
+	args << "commit" << "-b" << chain.first().getFilename() << chain.last().getFilename();
+	ret = m_adapter.run(QEMU_IMG, args, NULL, NULL);
 	if (ret)
 	{
 		return Expected<void>::fromMessage(QString(IDS_ERR_SUBPROGRAM_RETURN_CODE)
-		                                   .arg(QEMU_IMG).arg(args.join(" ")).arg(ret));
+										   .arg(QEMU_IMG).arg(args.join(" ")).arg(ret));
 	}
-
-	m_adapter.rename(chain.first().getFilename(), getDiskPath());
-
-	// Base does not exist anymore. Preserve current image.
-	Q_FOREACH(const Image::Info &info, chain.mid(1, chain.length() - 2))
-		m_adapter.remove(info.getFilename());
-
 	return Expected<void>();
 }
 
-Expected<void> External::execute() const
+////////////////////////////////////////////////////////////
+// Sequential
+
+quint64 Sequential::getNeededSpace(const Image::Chain &snapshotChain) const
+{
+	// Base image is resized in-place.
+	quint64	actualSizeSum = snapshotChain.getActualSizeSum(),
+			virtualSizeMax = snapshotChain.getVirtualSizeMax();
+
+	quint64 resultSize = qMin(actualSizeSum, virtualSizeMax);
+	return resultSize - snapshotChain.getList().first().getActualSize();
+}
+
+Expected<void> Sequential::doCommit(const QList<Image::Info> &chain) const
+{
+	int ret;
+	QStringList args;
+	args << "commit";
+	for (int i = chain.length() - 1; i > 0; --i)
+	{
+		args << chain[i].getFilename();
+		ret = m_adapter.run(QEMU_IMG, args, NULL, NULL);
+		if (ret)
+		{
+			return Expected<void>::fromMessage(QString(IDS_ERR_SUBPROGRAM_RETURN_CODE)
+											   .arg(QEMU_IMG).arg(args.join(" ")).arg(ret));
+		}
+		args.removeLast();
+	}
+	return Expected<void>();
+}
+
+////////////////////////////////////////////////////////////
+// Executor
+
+Expected<void> Executor::execute() const
 {
 	Expected<boost::shared_ptr<DiskLockGuard> > hddGuard =
 		DiskLockGuard::openWrite(getDiskPath());
@@ -735,12 +801,11 @@ Expected<void> External::execute() const
 	if (snapshotChain.getList().length() <= 1)
 		return Expected<void>();
 
-	Expected<void> space = checkSpace(snapshotChain);
-	if (!space.isOk())
-		return space;
-
-	return doCommit(snapshotChain.getList());
+	return boost::apply_visitor(Visitor::Merge::External(
+				snapshotChain, m_adapter), m_mode);
 }
+
+} // namespace External
 
 ////////////////////////////////////////////////////////////
 // Internal
@@ -784,6 +849,28 @@ Expected<void> Internal::execute() const
 
 ////////////////////////////////////////////////////////////
 // MergeSnapshots
+
+Expected<Merge::External::mode_type>
+MergeSnapshots::getExternalMode(const boost::optional<Call> &call)
+{
+	using namespace Merge::External;
+	QByteArray out;
+	QStringList args;
+	args << "--help";
+	int ret = run_prg(QEMU_IMG, args, &out, NULL);
+	if (ret)
+	{
+		return Expected<mode_type>::fromMessage(QString(IDS_ERR_SUBPROGRAM_RETURN_CODE)
+		                                        .arg(QEMU_IMG).arg(args.join(" ")).arg(ret));
+	}
+
+	bool baseSupported = QString(out).contains(QRegExp("^\\s*commit.*-b.*$"));
+	Logger::info(QString("Backing file specification [-b] is %1supported")
+	             .arg(baseSupported ? "" : "not "));
+	if (baseSupported)
+		return mode_type(Direct(call));
+	return mode_type(Sequential(call));
+}
 
 Expected<void> MergeSnapshots::execute() const
 {
