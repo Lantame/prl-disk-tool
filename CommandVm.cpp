@@ -343,7 +343,8 @@ private:
 		if (!m_image.getFullBackingFilename().isEmpty())
 		{
 			// Preserve backing image.
-			args << "-o" << QString("backing_file=%1").arg(m_image.getFullBackingFilename());
+			args << "-o" << QString("backing_file='%1',lazy_refcounts=on")
+			                .arg(m_image.getFullBackingFilename());
 		}
 		args << getTmpImagePath(m_image.getFilename()) << QString("%1M").arg(mb);
 		int ret = m_adapter.run(QEMU_IMG, args, NULL, NULL);
@@ -494,7 +495,7 @@ struct PreConvert
 		QString tmpPath = getTmpImagePath(path);
 		QStringList args;
 		args << "convert" << "-O" << DISK_FORMAT << "-o"
-			 << "preallocation=" + mode
+			 << QString("preallocation=%1,lazy_refcounts=on").arg(mode)
 			 << path << tmpPath;
 
 		int ret = m_adapter.run(QEMU_IMG, args, NULL, NULL);
