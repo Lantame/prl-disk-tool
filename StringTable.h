@@ -37,7 +37,6 @@
 extern char IDS_ERR_INVALID_OPTION[];
 extern char IDS_CANNOT_PARSE_IMAGE[];
 extern char IDS_ERR_NO_FREE_SPACE[];
-extern char IDS_ERR_NO_FREE_SPACE_EXT[];
 extern char IDS_ERR_SUBPROGRAM_RETURN_CODE[];
 extern char IDS_ERR_INVALID_ARGS[];
 extern char IDS_ERR_INVALID_HDD[];

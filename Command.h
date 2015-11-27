@@ -158,26 +158,65 @@ struct CompactInfo: Default
 
 namespace Merge
 {
+namespace External
+{
 
 ////////////////////////////////////////////////////////////
-// External
+// Direct
 
-struct External: DiskAware
+struct Direct
 {
-	External(const DiskAware &disk, const boost::optional<Call> &call):
-		DiskAware(disk), m_adapter(call)
+	explicit Direct(const boost::optional<Call> &call):
+		m_adapter(call)
+	{
+	}
+
+	quint64 getNeededSpace(const Image::Chain &snapshotChain) const;
+	Expected<void> doCommit(const QList<Image::Info> &chain) const;
+
+private:
+	CallAdapter m_adapter;
+};
+
+////////////////////////////////////////////////////////////
+// Sequential
+
+struct Sequential
+{
+	explicit Sequential(const boost::optional<Call> &call):
+		m_adapter(call)
+	{
+	}
+
+	quint64 getNeededSpace(const Image::Chain &snapshotChain) const;
+	Expected<void> doCommit(const QList<Image::Info> &chain) const;
+
+private:
+	CallAdapter m_adapter;
+};
+
+typedef boost::variant<Direct, Sequential> mode_type;
+
+////////////////////////////////////////////////////////////
+// Executor
+
+struct Executor: DiskAware
+{
+	Executor(const DiskAware &disk,
+			 const mode_type &mode,
+			 const boost::optional<Call> &call):
+		DiskAware(disk), m_mode(mode), m_adapter(call)
 	{
 	}
 
 	Expected<void> execute() const;
 
 private:
-	Expected<void> checkSpace(const Image::Chain &snapshotChain) const;
-
-	Expected<void> doCommit(const QList<Image::Info> &chain) const;
-
+	mode_type m_mode;
 	CallAdapter m_adapter;
 };
+
+} // namespace External
 
 ////////////////////////////////////////////////////////////
 // Internal
@@ -195,6 +234,8 @@ private:
 	CallAdapter m_adapter;
 };
 
+typedef boost::variant<External::Executor, Internal> mode_type;
+
 } // namespace Merge
 
 ////////////////////////////////////////////////////////////
@@ -204,17 +245,21 @@ struct MergeSnapshots: DiskAware
 {
 	MergeSnapshots(
 			const DiskAware &disk,
-			const boost::variant<Merge::External, Merge::Internal> &executor,
+			const Merge::mode_type &executor,
 			const boost::optional<Call> &call):
 		DiskAware(disk), m_executor(executor), m_call(call)
 	{
 	}
 
+	// Check whether '-b' option (commit to specified base) is supported.
+	static Expected<Merge::External::mode_type> getExternalMode(
+			const boost::optional<Call> &m_call);
+
 	Expected<void> execute() const;
 	Expected<void> executePloop() const;
 
 private:
-	boost::variant<Merge::External, Merge::Internal> m_executor;
+	Merge::mode_type m_executor;
 	boost::optional<Call> m_call;
 };
 

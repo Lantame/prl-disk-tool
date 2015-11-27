@@ -372,8 +372,13 @@ Expected<MergeSnapshots> Factory<MergeSnapshots>::operator()() const
 
 	if (m_vm.count(OPT_EXTERNAL))
 	{
-		return MergeSnapshots(disk.get(), Merge::External(
-					disk.get(), m_call), m_call);
+		Expected<Merge::External::mode_type> mode =
+			MergeSnapshots::getExternalMode(m_call);
+		if (!mode.isOk())
+			return mode;
+
+		return MergeSnapshots(disk.get(), Merge::External::Executor(
+					disk.get(), mode.get(), m_call), m_call);
 	}
 	else
 	{

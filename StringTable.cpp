@@ -36,7 +36,6 @@
 char IDS_ERR_INVALID_OPTION[] = "Invalid option '%1'";
 char IDS_CANNOT_PARSE_IMAGE[] = "Cannot parse image information";
 char IDS_ERR_NO_FREE_SPACE[] = "Not enough free space ( needed: %1 available: %2 )";
-char IDS_ERR_NO_FREE_SPACE_EXT[] = "Not enough free space ( needed: %1 [ %2 ] available: %3 )";
 char IDS_ERR_SUBPROGRAM_RETURN_CODE[] = "%1 %2 returned %3";
 char IDS_ERR_INVALID_ARGS[] = "Invalid arguments";
 char IDS_ERR_INVALID_HDD[] = "Invalid disk path";

@@ -96,6 +96,8 @@ Expected<Info> Parser::parseInfo(const pt::ptree &v)
 	if (!actualSize)
 		return Expected<Info>::fromMessage(IDS_CANNOT_PARSE_IMAGE);
 	boost::optional<std::string> format = v.get_optional<std::string>("format");
+	if (!format)
+		return Expected<Info>::fromMessage(IDS_CANNOT_PARSE_IMAGE);
 	if (*format != DISK_FORMAT)
 	{
 		return Expected<Info>::fromMessage(QString("%1: unsupported format \"%2\". Only \"%3\" is supported.")
@@ -127,7 +129,14 @@ Expected<Chain> Parser::parse(const QByteArray &data)
 {
 	pt::ptree pt;
 	std::istringstream stream(data.constData());
-	read_json(stream, pt);
+	try
+	{
+		read_json(stream, pt);
+	}
+	catch(pt::json_parser_error &e)
+	{
+		return Expected<Chain>::fromMessage(QString::fromStdString(e.what()));
+	}
 
 	QList<Info> chain;
 	// Newest image is first, so add in reverse.
