@@ -623,7 +623,7 @@ namespace Resizer
 
 mode_type getModeConsider(const Image::Info &info, quint64 sizeMb)
 {
-	if (info.getVirtualSize() > sizeMb)
+	if (info.getVirtualSize() > convertMbToBytes(sizeMb))
 		return Consider::Shrink();
 	else
 		return Consider::Expand();
@@ -631,7 +631,7 @@ mode_type getModeConsider(const Image::Info &info, quint64 sizeMb)
 
 mode_type getModeIgnore(const Image::Info &info, quint64 sizeMb)
 {
-	if (info.getVirtualSize() > sizeMb)
+	if (info.getVirtualSize() > convertMbToBytes(sizeMb))
 		return Ignore::Shrink();
 	else
 		return Ignore::Expand();
