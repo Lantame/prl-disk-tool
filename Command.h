@@ -77,6 +77,78 @@ protected:
 	}
 };
 
+namespace Resizer
+{
+namespace Ignore
+{
+
+////////////////////////////////////////////////////////////
+// Shrink
+
+struct Shrink
+{
+	Expected<void> execute(
+			const Image::Info &image, quint64 sizeMb,
+			const boost::optional<Call> &call,
+			const boost::optional<GuestFS::Action> &gfsAction) const;
+
+	Expected<void> checkSpace(const Image::Info &image) const;
+};
+
+////////////////////////////////////////////////////////////
+// Expand
+
+struct Expand
+{
+	Expected<void> execute(
+			const Image::Info &image, quint64 sizeMb,
+			const boost::optional<Call> &call) const;
+
+	Expected<void> checkSpace(const Image::Info &image, quint64 sizeMb) const;
+};
+
+} // namespace Ignore
+
+namespace Consider
+{
+
+////////////////////////////////////////////////////////////
+// Shrink
+
+struct Shrink
+{
+	Expected<void> execute(
+			const Image::Info &image, quint64 sizeMb,
+			const boost::optional<Call> &call,
+			const boost::optional<GuestFS::Action> &gfsAction) const;
+
+	Expected<void> checkSpace(const Image::Info &image) const;
+};
+
+////////////////////////////////////////////////////////////
+// Expand
+
+struct Expand
+{
+	Expected<void> execute(
+			const Image::Info &image, quint64 sizeMb,
+			const boost::optional<Call> &call,
+			const boost::optional<GuestFS::Action> &gfsAction) const;
+
+	Expected<void> checkSpace(const Image::Info &image, quint64 sizeMb) const;
+};
+
+} // namespace Consider
+
+typedef boost::variant<
+	Ignore::Shrink,
+	Ignore::Expand,
+	Consider::Shrink,
+	Consider::Expand
+	> mode_type;
+
+} // namespace Resizer
+
 ////////////////////////////////////////////////////////////
 // Resize
 
