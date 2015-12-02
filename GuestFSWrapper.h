@@ -164,6 +164,14 @@ private:
 };
 
 ////////////////////////////////////////////////////////////
+// Swap
+
+struct Swap
+{
+	static quint64 getMinSize();
+};
+
+////////////////////////////////////////////////////////////
 // Unknown
 
 struct Unknown
@@ -175,7 +183,8 @@ typedef boost::variant<
 	Ext,
 	Ntfs,
 	Btrfs,
-	Xfs
+	Xfs,
+	Swap
 > fs_type;
 
 ////////////////////////////////////////////////////////////
@@ -290,8 +299,10 @@ private:
 struct Unit
 {
 	Unit(guestfs_h *g, const GuestFS::Helper &helper,
-		 const boost::optional<GuestFS::Action> &gfsAction, const QString &name):
-		m_g(g),  m_helper(helper), m_gfsAction(gfsAction), m_name(name)
+		 const boost::optional<GuestFS::Action> &gfsAction,
+		 const QString &name, const GuestFS::fs_type &filesystem = GuestFS::Unknown()):
+		m_g(g),  m_helper(helper), m_gfsAction(gfsAction),
+		m_name(name), m_filesystem(filesystem)
 	{
 	}
 
@@ -309,6 +320,7 @@ struct Unit
 
 	Expected<quint64> getMinSize() const;
 
+	template <class T> const T* getFilesystem() const;
 	/* Disk-modifying */
 	Expected<void> shrinkFilesystem(quint64 dec) const;
 
@@ -333,11 +345,6 @@ struct Unit
 	Expected<void> apply(const Attribute::Aggregate &attrs) const;
 
 private:
-	/* Disk-modifying */
-	Expected<void> resizeFilesystem(quint64 newSize, const GuestFS::fs_type &fs) const;
-
-	Expected<GuestFS::fs_type> getFS() const;
-
 	Expected<quint64> getMinSize(const GuestFS::fs_type &fs) const;
 
 	template<class T> Expected<T> getAttributesInternal() const;
@@ -347,6 +354,7 @@ private:
 	GuestFS::Helper m_helper;
 	boost::optional<GuestFS::Action> m_gfsAction;
 	QString m_name;
+	GuestFS::fs_type m_filesystem;
 };
 
 ////////////////////////////////////////////////////////////
@@ -367,6 +375,7 @@ struct List
 
 private:
 	Expected<void> load() const;
+	Expected<QMap<QString, GuestFS::fs_type> > getFilesystems() const;
 
 	guestfs_h *m_g;
 	GuestFS::Helper m_helper;
