@@ -67,6 +67,7 @@ struct Helper
 
 	/* 'msdos' or 'gpt' */
 	Expected<QString> getPartitionTable() const;
+	Expected<struct statvfs> getFilesystemStats(const QString &name) const;
 
 private:
 	guestfs_h *m_g;
@@ -78,6 +79,10 @@ private:
 
 struct Ext
 {
+	Ext()
+	{
+	}
+
 	Ext(guestfs_h *g, const QString &partition):
 		m_g(g), m_partition(partition)
 	{
@@ -96,6 +101,10 @@ private:
 
 struct Ntfs
 {
+	Ntfs()
+	{
+	}
+
 	Ntfs(guestfs_h *g, const QString &partition):
 		 m_g(g), m_partition(partition)
 	{
@@ -114,6 +123,10 @@ private:
 
 struct Btrfs
 {
+	Btrfs()
+	{
+	}
+
 	Btrfs(guestfs_h *g, const QString &partition):
 		  m_g(g), m_partition(partition)
 	{
@@ -132,6 +145,10 @@ private:
 
 struct Xfs
 {
+	Xfs()
+	{
+	}
+
 	Xfs(guestfs_h *g, const QString &partition):
 		m_g(g), m_partition(partition)
 	{
@@ -145,6 +162,21 @@ private:
 	guestfs_h *m_g;
 	QString m_partition;
 };
+
+////////////////////////////////////////////////////////////
+// Unknown
+
+struct Unknown
+{
+};
+
+typedef boost::variant<
+	Unknown,
+	Ext,
+	Ntfs,
+	Btrfs,
+	Xfs
+> fs_type;
 
 ////////////////////////////////////////////////////////////
 // Action
@@ -282,6 +314,8 @@ struct Unit
 	/* Disk-modifying */
 	Expected<void> resizeFilesystem(quint64 newSize) const;
 
+	Expected<bool> isFilesystemSupported() const;
+
 	Expected<struct statvfs> getFilesystemStats() const;
 
 	/* Disk-modifying.
@@ -299,11 +333,11 @@ struct Unit
 
 private:
 	/* Disk-modifying */
-	Expected<void> resizeFilesystem(quint64 newSize, const QString &fs) const;
+	Expected<void> resizeFilesystem(quint64 newSize, const GuestFS::fs_type &fs) const;
 
-	Expected<QString> getFS() const;
+	Expected<GuestFS::fs_type> getFS() const;
 
-	Expected<quint64> getMinSize(const QString &fs) const;
+	Expected<quint64> getMinSize(const GuestFS::fs_type &fs) const;
 
 	template<class T> Expected<T> getAttributesInternal() const;
 

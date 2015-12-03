@@ -332,7 +332,13 @@ struct ResizeHelper
 
 		Expected<quint64> partMinSize = lastPartition.get().getMinSize();
 		if (!partMinSize.isOk())
+		{
+			if (partMinSize.getCode() != ERR_UNSUPPORTED_FS)
+				return partMinSize;
+
 			info.m_fsSupported = false;
+			info.m_minSize = info.m_currentSize - tail + overhead.get();
+		}
 		else
 		{
 			Logger::info(QString("Minimum size: %1").arg(partMinSize.get()));
@@ -594,6 +600,15 @@ Expected<mode_type> getModeConsider(const Image::Info &info, quint64 sizeMb)
 	Expected<Partition::Unit> lastPartition = helper.getLastPartition();
 	if (lastPartition.isOk())
 	{
+		Expected<bool> fsSupported = lastPartition.get().isFilesystemSupported();
+		if (!fsSupported.isOk())
+			return Expected<void>(fsSupported);
+		else if (!fsSupported.get())
+		{
+			// Unsupported fs. Fallback to partition-unaware resize.
+			return getModeIgnore(info, sizeMb);
+		}
+
 		// Partition-aware resize is safe.
 		if (info.getVirtualSize() > convertMbToBytes(sizeMb))
 			return mode_type(Consider::Shrink());
