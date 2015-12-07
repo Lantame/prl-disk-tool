@@ -41,6 +41,7 @@ char IDS_ERR_INVALID_ARGS[] = "Invalid arguments";
 char IDS_ERR_INVALID_HDD[] = "Invalid disk path";
 char IDS_ERR_HDD_NOT_EXISTS[] = "The specified disk image \"%1\" does not exist";
 char IDS_ERR_CANNOT_CONVERT_NEED_MERGE[] = "Image has backing files. Try calling \"prl_disk_tool merge --external\" first.";
+char IDS_ERR_HAS_INTERNAL_SNAPSHOTS[] = "Image has internal snapshots. Merge snapshots to proceed.";
 char IDS_ERR_PLOOP_EXEC_FAILED[] = "Failed to execute ploop";
 char IDS_ERR_NO_FS_FREE_SPACE[] =
 	"Not enough free space on filesystem ( requested: %1 minimum: %2 )\n"

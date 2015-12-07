@@ -151,3 +151,65 @@ Expected<Chain> Parser::parse(const QByteArray &data)
 	}
 	return Chain(chain);
 }
+
+////////////////////////////////////////////////////////////
+// Unit
+
+Expected<Chain> Unit::getChain() const
+{
+	QStringList args;
+	args << "info" << "--backing-chain" << "--output=json" << m_diskPath;
+	QByteArray out;
+	if (run_prg(QEMU_IMG, args, &out, NULL))
+		return Expected<Chain>::fromMessage("Snapshot chain is unavailable");
+
+	QString dirPath = QFileInfo(m_diskPath).absolutePath();
+	Expected<Chain> chain = Parser(dirPath).parse(out);
+	if (chain.isOk())
+		Logger::info(chain.get().toString() + "\n");
+	return chain;
+}
+
+Expected<Chain> Unit::getChainNoSnapshots() const
+{
+	Expected<void> res = checkSnapshots();
+	if (!res.isOk())
+		return res;
+	return getChain();
+}
+
+Expected<QStringList> Unit::getSnapshots() const
+{
+	QStringList args;
+	args << "snapshot" << "-l" << m_diskPath;
+	QByteArray out;
+	int ret;
+	if ((ret = run_prg(QEMU_IMG, args, &out, NULL)))
+	{
+		return Expected<QStringList>::fromMessage(
+				QString(IDS_ERR_SUBPROGRAM_RETURN_CODE)
+				.arg(QEMU_IMG).arg(args.join(" ")).arg(ret));
+	}
+
+	//                   | ID  |     TAG        | VMSIZE|   DATE                |
+	QRegExp snapshotRE("^(\\d+)\\s+(\\S|\\S.*\\S)\\s+\\d+\\s+\\d{4}-\\d{2}-\\d{2}");
+	QStringList lines = QString(out).split('\n');
+	QStringList snapshots;
+	Q_FOREACH(const QString &line, lines)
+	{
+		if (snapshotRE.indexIn(line) < 0)
+			continue;
+		snapshots << snapshotRE.cap(1);
+	}
+	return snapshots;
+}
+
+Expected<void> Unit::checkSnapshots() const
+{
+	Expected<QStringList> snapshots = getSnapshots();
+	if (!snapshots.isOk())
+		return snapshots;
+	if (!snapshots.get().isEmpty())
+		return Expected<void>::fromMessage(IDS_ERR_HAS_INTERNAL_SNAPSHOTS);
+	return Expected<void>();
+}

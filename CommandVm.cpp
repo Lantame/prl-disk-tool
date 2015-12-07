@@ -131,21 +131,6 @@ bool OutputCallback(int iComplete, int iTotal, void *pParam)
 }
 */
 
-Expected<Image::Chain> parseImageChain(const QString &path)
-{
-	QStringList args;
-	args << "info" << "--backing-chain" << "--output=json" << path;
-	QByteArray out;
-	if (run_prg(QEMU_IMG, args, &out, NULL))
-		return Expected<Image::Chain>::fromMessage("Snapshot chain is unavailable");
-
-	QString dirPath = QFileInfo(path).absolutePath();
-	Expected<Image::Chain> chain = Image::Parser(dirPath).parse(out);
-	if (chain.isOk())
-		Logger::info(chain.get().toString() + "\n");
-	return chain;
-}
-
 quint64 getAvailableSpace(const QString &path)
 {
 	struct statvfs stat;
@@ -464,7 +449,7 @@ struct ResizeHelper
 			return mode;
 
 		Merge::External::Executor external(DiskAware(path), mode.get(), m_call);
-		Expected<Image::Chain> chain = parseImageChain(path);
+		Expected<Image::Chain> chain = Image::Unit(path).getChain();
 		if (!chain.isOk())
 			return chain;
 
@@ -1041,7 +1026,7 @@ Expected<void> Resize::execute() const
 	Expected<boost::shared_ptr<DiskLockGuard> > hddGuard = DiskLockGuard::openWrite(getDiskPath());
 	if (!hddGuard.isOk())
 		return hddGuard;
-	Expected<Image::Chain> result = parseImageChain(getDiskPath());
+	Expected<Image::Chain> result = Image::Unit(getDiskPath()).getChainNoSnapshots();
 	if (!result.isOk())
 		return result;
 	Image::Chain snapshotChain = result.get();
@@ -1067,7 +1052,7 @@ Expected<void> ResizeInfo::execute() const
 	Expected<boost::shared_ptr<DiskLockGuard> > hddGuard = DiskLockGuard::openRead(getDiskPath());
 	if (!hddGuard.isOk())
 		return hddGuard;
-	Expected<Image::Chain> result = parseImageChain(getDiskPath());
+	Expected<Image::Chain> result = Image::Unit(getDiskPath()).getChain();
 	if (!result.isOk())
 		return result;
 	Image::Chain snapshotChain = result.get();
@@ -1107,7 +1092,7 @@ Expected<void> CompactInfo::execute() const
 	Expected<boost::shared_ptr<DiskLockGuard> > hddGuard = DiskLockGuard::openRead(getDiskPath());
 	if (!hddGuard.isOk())
 		return hddGuard;
-	Expected<Image::Chain> result = parseImageChain(getDiskPath());
+	Expected<Image::Chain> result = Image::Unit(getDiskPath()).getChain();
 	if (!result.isOk())
 		return result;
 	Image::Chain snapshotChain = result.get();
@@ -1228,9 +1213,17 @@ Expected<void> Executor::execute() const
 	if (!hddGuard.isOk())
 		return hddGuard;
 
-	Expected<Image::Chain> result = parseImageChain(getDiskPath());
+	Expected<Image::Chain> result = Image::Unit(getDiskPath()).getChainNoSnapshots();
 	if (!result.isOk())
 		return result;
+
+	// We will drop all snapshots in merged images. Check for absence.
+	Q_FOREACH(const Image::Info &info, result.get().getList().mid(1))
+	{
+		Expected<void> res = Image::Unit(info.getFilename()).checkSnapshots();
+		if (!res.isOk())
+			return res;
+	}
 
 	Image::Chain snapshotChain = result.get();
 	return execute(snapshotChain);
@@ -1255,26 +1248,16 @@ Expected<void> Internal::execute() const
 	Expected<boost::shared_ptr<DiskLockGuard> > hddGuard = DiskLockGuard::openWrite(getDiskPath());
 	if (!hddGuard.isOk())
 		return hddGuard;
-	int ret;
 
-	QStringList args;
-	args << "snapshot" << "-l" << getDiskPath();
-	QByteArray out;
-	if ((ret = run_prg(QEMU_IMG, args, &out, NULL)))
-	{
-		return Expected<void>::fromMessage(QString(IDS_ERR_SUBPROGRAM_RETURN_CODE)
-										   .arg(QEMU_IMG).arg(args.join(" ")).arg(ret));
-	}
+	Expected<QStringList> snapshots = Image::Unit(getDiskPath()).getSnapshots();
+	if (!snapshots.isOk())
+		return snapshots;
 
-	//                   | ID  |     TAG     | VMSIZE|   DATE                      TIME        |
-	QRegExp snapshotRE("^\\d+\\s+(\\S.*\\S)\\s+\\d+\\s+\\d{4}-\\d{2}-\\d{2}");
-	QStringList lines = QString(out).split('\n');
-	Q_FOREACH(const QString &line, lines)
+	Q_FOREACH(const QString &id, snapshots.get())
 	{
-		if (snapshotRE.indexIn(line) < 0)
-			continue;
-		args.clear();
-		args << "snapshot" << "-d" << snapshotRE.cap(1) << getDiskPath();
+		QStringList args;
+		args << "snapshot" << "-d" << id << getDiskPath();
+		int ret;
 		if ((ret = m_adapter.run(QEMU_IMG, args, NULL, NULL)))
 		{
 			return Expected<void>::fromMessage(QString(IDS_ERR_SUBPROGRAM_RETURN_CODE)
@@ -1304,7 +1287,7 @@ MergeSnapshots::getExternalMode(const boost::optional<Call> &call)
 		                                        .arg(QEMU_IMG).arg(args.join(" ")).arg(ret));
 	}
 
-	bool baseSupported = QString(out).contains(QRegExp("^\\s*commit.*-b.*$"));
+	bool baseSupported = QString(out).split('\n').indexOf(QRegExp("^\\s*commit.*-b.*$")) != -1;
 	Logger::info(QString("Backing file specification [-b] is %1supported")
 	             .arg(baseSupported ? "" : "not "));
 	if (baseSupported)
@@ -1358,7 +1341,7 @@ Expected<void> Convert::execute() const
 	Expected<boost::shared_ptr<DiskLockGuard> > hddGuard = DiskLockGuard::openWrite(getDiskPath());
 	if (!hddGuard.isOk())
 		return hddGuard;
-	Expected<Image::Chain> result = parseImageChain(getDiskPath());
+	Expected<Image::Chain> result = Image::Unit(getDiskPath()).getChainNoSnapshots();
 	if (!result.isOk())
 		return result;
 	Image::Chain snapshotChain = result.get();
