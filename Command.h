@@ -282,6 +282,11 @@ struct Executor: DiskAware
 	}
 
 	Expected<void> execute() const;
+	/* Merges only the given subchain.
+	 * Does not take disk lock.
+	 * Does not use constructor 'disk' parameter.
+	 */
+	Expected<void> execute(const Image::Chain &snapshotChain) const;
 
 private:
 	mode_type m_mode;
