@@ -112,6 +112,8 @@ Expected<Info> Parser::parseInfo(const pt::ptree &v)
 		QString fullBacking;
 		if (fBacking)
 			fullBacking = QString::fromStdString(*fBacking);
+		else if (QDir(QString::fromStdString(*backing)).isAbsolute())
+			fullBacking = QString::fromStdString(*backing);
 		else
 		{
 			// Images are in working directory.
