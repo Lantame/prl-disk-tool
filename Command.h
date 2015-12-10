@@ -102,7 +102,8 @@ struct Expand
 {
 	Expected<void> execute(
 			const Image::Info &image, quint64 sizeMb,
-			const boost::optional<Call> &call) const;
+			const boost::optional<Call> &call,
+			const boost::optional<GuestFS::Action> &gfsAction) const;
 
 	Expected<void> checkSpace(const Image::Info &image, quint64 sizeMb) const;
 };
