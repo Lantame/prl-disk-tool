@@ -630,7 +630,7 @@ template<> Expected<void> Resize::operator() (
 	Expected<void> res = mode.checkSpace(m_image, m_sizeMb);
 	if (!res.isOk())
 		return res;
-	return mode.execute(m_image, m_sizeMb, m_call, m_gfsAction);
+	return mode.execute(m_image, m_sizeMb, m_call);
 }
 
 template<> Expected<void> Resize::operator() (
@@ -849,25 +849,9 @@ Expected<void> Ignore::Shrink::checkSpace(const Image::Info &image) const
 
 Expected<void> Ignore::Expand::execute(
 		const Image::Info &image, quint64 sizeMb,
-		const boost::optional<Call> &call,
-		const boost::optional<GuestFS::Action> &gfsAction) const
+		const boost::optional<Call> &call) const
 {
 	CallAdapter adapter(call);
-	QString table;
-	{
-		// Block to ensure handle is removed before resize.
-		ResizeHelper helper(image, call, gfsAction);
-
-		Expected<Wrapper> gfs = helper.getGFS();
-		if (!gfs.isOk())
-			return gfs;
-
-		Expected<QString> partTable = gfs.get().getPartitionTable();
-		if (!partTable.isOk())
-			return partTable;
-		table = partTable.get();
-	}
-
 	QStringList args;
 	// This is performed in-place.
 	args << "resize" << image.getFilename() << QString("%1M").arg(sizeMb);
@@ -877,21 +861,6 @@ Expected<void> Ignore::Expand::execute(
 		return Expected<void>::fromMessage(QString(IDS_ERR_SUBPROGRAM_RETURN_CODE)
 		                                   .arg(QEMU_IMG).arg(args.join(" ")).arg(ret));
 	}
-
-	if (table == "gpt")
-	{
-		// Windows does not see additional space if backup GPT header is not moved.
-		// So we have to move it to the end of the disk.
-		ResizeHelper helper(image, call, gfsAction);
-		Expected<Wrapper> gfs = helper.getGFS(true);
-		if (!gfs.isOk())
-			return gfs;
-
-		Expected<void> res;
-		if (!(res = gfs.get().expandGPT()).isOk())
-			return res;
-	}
-
 	return Expected<void>();
 
 }
