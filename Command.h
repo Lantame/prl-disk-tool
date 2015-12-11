@@ -140,9 +140,35 @@ struct Expand
 
 } // namespace Consider
 
+////////////////////////////////////////////////////////////
+// Gpt
+
+template <class T>
+struct Gpt
+{
+	Gpt(const T &mode):
+		m_mode(mode)
+	{
+	}
+
+	Expected<void> execute(
+			const Image::Info &image, quint64 sizeMb,
+			const boost::optional<Call> &call,
+			const boost::optional<GuestFS::Action> &gfsAction) const;
+
+	const T& getMode() const
+	{
+		return m_mode;
+	}
+
+private:
+	T m_mode;
+};
+
 typedef boost::variant<
 	Ignore::Shrink,
 	Ignore::Expand,
+	Gpt<Ignore::Expand>,
 	Consider::Shrink,
 	Consider::Expand
 	> mode_type;

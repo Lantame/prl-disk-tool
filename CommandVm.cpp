@@ -566,6 +566,252 @@ private:
 
 namespace Command
 {
+namespace Resizer
+{
+
+Expected<mode_type> getModeIgnore(const Image::Info &info, quint64 sizeMb)
+{
+	if (info.getVirtualSize() > convertMbToBytes(sizeMb))
+		return mode_type(Ignore::Shrink());
+	ResizeHelper helper(info);
+
+	Expected<Wrapper> gfs = helper.getGFS();
+	if (!gfs.isOk())
+		return Expected<void>(gfs);
+
+	Expected<QString> partTable = gfs.get().getPartitionTable();
+	if (!partTable.isOk())
+		return Expected<void>(partTable);
+
+	if (partTable.get() == "gpt")
+		return mode_type(Gpt<Ignore::Expand>(Ignore::Expand()));
+	return mode_type(Ignore::Expand());
+}
+
+Expected<mode_type> getModeConsider(const Image::Info &info, quint64 sizeMb)
+{
+	ResizeHelper helper(info);
+	Expected<Partition::Unit> lastPartition = helper.getLastPartition();
+	if (lastPartition.isOk())
+	{
+		// Partition-aware resize is safe.
+		if (info.getVirtualSize() > convertMbToBytes(sizeMb))
+			return mode_type(Consider::Shrink());
+		else
+			return mode_type(Consider::Expand());
+	}
+	else if (lastPartition.getCode() == ERR_NO_PARTITIONS)
+	{
+		// Safe to resize ignoring partitions.
+		return getModeIgnore(info, sizeMb);
+	}
+	else
+	{
+		// We may destroy data. Refuse.
+		return Expected<void>(lastPartition);
+	}
+}
+
+////////////////////////////////////////////////////////////
+// Ignore::Shrink
+
+Expected<void> Ignore::Shrink::execute(
+		const Image::Info &image, quint64 sizeMb,
+		const boost::optional<Call> &call,
+		const boost::optional<GuestFS::Action> &gfsAction) const
+{
+	ResizeHelper helper(image, call, gfsAction);
+	CallAdapter adapter(call);
+
+	Expected<QString> tmpPath = helper.createTmpImage(sizeMb);
+	if (!tmpPath.isOk())
+		return tmpPath;
+	BOOST_SCOPE_EXIT(&tmpPath)
+	{
+		QFile::remove(tmpPath.get());
+	} BOOST_SCOPE_EXIT_END
+
+	Expected<void> res;
+	if (!(res = VirtResize(adapter)(image.getFilename(), tmpPath.get())).isOk())
+		return res;
+	adapter.rename(tmpPath.get(), image.getFilename());
+	return res;
+}
+
+Expected<void> Ignore::Shrink::checkSpace(const Image::Info &image) const
+{
+	quint64 avail = getAvailableSpace(image.getFilename());
+	quint64 resultSize = image.getActualSize();
+	// We copy an image without modifyng anything,
+	// so we need equal amount of space.
+	if (resultSize > avail)
+	{
+		return Expected<void>::fromMessage(QString(IDS_ERR_NO_FREE_SPACE)
+		                                   .arg(resultSize).arg(avail));
+	}
+	return Expected<void>();
+}
+
+////////////////////////////////////////////////////////////
+// Ignore::Expand
+
+Expected<void> Ignore::Expand::execute(
+		const Image::Info &image, quint64 sizeMb,
+		const boost::optional<Call> &call) const
+{
+	CallAdapter adapter(call);
+	QStringList args;
+	// This is performed in-place.
+	args << "resize" << image.getFilename() << QString("%1M").arg(sizeMb);
+	int ret = adapter.run(QEMU_IMG, args, NULL, NULL);
+	if (ret)
+	{
+		return Expected<void>::fromMessage(QString(IDS_ERR_SUBPROGRAM_RETURN_CODE)
+		                                   .arg(QEMU_IMG).arg(args.join(" ")).arg(ret));
+	}
+	return Expected<void>();
+}
+
+Expected<void> Ignore::Expand::checkSpace(
+		const Image::Info &image, quint64 sizeMb) const
+{
+	quint64 avail = getAvailableSpace(image.getFilename());
+	qint64 delta = (qint64)convertMbToBytes(sizeMb) - (qint64)image.getVirtualSize();
+	Q_ASSERT(delta > 0);
+	// We resize in-place, so we should consider only additional space.
+	if (delta > 0 && (quint64)delta > avail)
+	{
+		return Expected<void>::fromMessage(QString(IDS_ERR_NO_FREE_SPACE)
+		                                   .arg(delta).arg(avail));
+	}
+	return Expected<void>();
+}
+
+////////////////////////////////////////////////////////////
+// Consider::Shrink
+
+Expected<void> Consider::Shrink::execute(
+		const Image::Info &image, quint64 sizeMb,
+		const boost::optional<Call> &call,
+		const boost::optional<GuestFS::Action> &gfsAction) const
+{
+	ResizeHelper helper(image, call, gfsAction);
+	CallAdapter adapter(call);
+
+	Expected<QString> tmpPath = helper.createTmpImage(sizeMb);
+	if (!tmpPath.isOk())
+		return tmpPath;
+	BOOST_SCOPE_EXIT(&tmpPath)
+	{
+		QFile::remove(tmpPath.get());
+	} BOOST_SCOPE_EXIT_END
+
+	Expected<void> res;
+	if (!(res = helper.shrinkFSIfNeeded(sizeMb)).isOk())
+		return res;
+	Expected<Partition::Unit> lastPartition = helper.getLastPartition();
+	if (!lastPartition.isOk())
+		return lastPartition;
+	if (!(res = VirtResize(adapter).shrink(lastPartition.get().getName())
+				(image.getFilename(), tmpPath.get())).isOk())
+		return res;
+	adapter.rename(tmpPath.get(), image.getFilename());
+	return res;
+}
+
+Expected<void> Consider::Shrink::checkSpace(const Image::Info &image) const
+{
+	quint64 avail = getAvailableSpace(image.getFilename());
+	// Heuristic estimates: we create a copy of image.
+	quint64 resultSize = image.getActualSize();
+	if (resultSize > avail)
+	{
+		return Expected<void>::fromMessage(QString(IDS_ERR_NO_FREE_SPACE)
+		                                   .arg(resultSize).arg(avail));
+	}
+	return Expected<void>();
+}
+
+////////////////////////////////////////////////////////////
+// Consider::Expand
+
+Expected<void> Consider::Expand::execute(
+		const Image::Info &image, quint64 sizeMb,
+		const boost::optional<Call> &call,
+		const boost::optional<GuestFS::Action> &gfsAction) const
+{
+	// TODO: Implement in-place.
+	ResizeHelper helper(image, call, gfsAction);
+	CallAdapter adapter(call);
+
+	// Create overlay to operate on.
+	Expected<QString> tmpPath = helper.createTmpImage(sizeMb, image.getFilename());
+	if (!tmpPath.isOk())
+		return tmpPath;
+	BOOST_SCOPE_EXIT(&tmpPath)
+	{
+		QFile::remove(tmpPath.get());
+	} BOOST_SCOPE_EXIT_END
+
+	Expected<void> res;
+	Expected<Wrapper> gfs = helper.getGFS(true, tmpPath.get());
+	if (!gfs.isOk())
+		return gfs;
+
+	// Resize partition table, partition and fs.
+	if (!(res = helper.expandToFit(sizeMb, gfs.get())).isOk())
+		return res;
+
+	// External-merge overlay into original image.
+	if (!(res = helper.mergeIntoPrevious(tmpPath.get())).isOk())
+		return res;
+
+	// External merge removes backing images and leaves only top-most one.
+	// We need original image, so we rename the result.
+	adapter.rename(tmpPath.get(), image.getFilename());
+	return res;
+}
+
+Expected<void> Consider::Expand::checkSpace(
+		const Image::Info &image, quint64 sizeMb) const
+{
+	quint64 avail = getAvailableSpace(image.getFilename());
+	// Heuristic estimates: we only spend space for filesystem expanding.
+	const double FS_OVERHEAD = 0.05;
+	quint64 resultSize = (convertMbToBytes(sizeMb)) * FS_OVERHEAD;
+	if (resultSize > avail)
+	{
+		return Expected<void>::fromMessage(QString(IDS_ERR_NO_FREE_SPACE)
+		                                   .arg(resultSize).arg(avail));
+	}
+	return Expected<void>();
+}
+
+////////////////////////////////////////////////////////////
+// Gpt
+
+template <>
+Expected<void> Gpt<Ignore::Expand>::execute(
+		const Image::Info &image, quint64 sizeMb,
+		const boost::optional<Call> &call,
+		const boost::optional<GuestFS::Action> &gfsAction) const
+{
+	Expected<void> res;
+	if (!(res = m_mode.execute(image, sizeMb, call)).isOk())
+		return res;
+
+	// Windows does not see additional space if backup GPT header is not moved.
+	// So we have to move it to the end of the disk.
+	ResizeHelper helper(image, call, gfsAction);
+	Expected<Wrapper> gfs = helper.getGFS(true);
+	if (!gfs.isOk())
+		return gfs;
+
+	return gfs.get().expandGPT();
+}
+
+} // namespace Resizer
+
 namespace Visitor
 {
 
@@ -617,6 +863,9 @@ struct Resize: boost::static_visitor<Expected<void> >
 	template <class T>
 	Expected<void> operator() (const T &mode) const;
 
+	template <class T>
+	Expected<void> checkSpace(const T &mode) const;
+
 private:
 	Image::Info m_image;
 	quint64 m_sizeMb;
@@ -624,8 +873,8 @@ private:
 	boost::optional<Action> m_gfsAction;
 };
 
-template<> Expected<void> Resize::operator() (
-		const Resizer::Ignore::Expand &mode) const
+template <>
+Expected<void> Resize::operator() (const Resizer::Ignore::Expand &mode) const
 {
 	Expected<void> res = mode.checkSpace(m_image, m_sizeMb);
 	if (!res.isOk())
@@ -633,22 +882,37 @@ template<> Expected<void> Resize::operator() (
 	return mode.execute(m_image, m_sizeMb, m_call);
 }
 
-template<> Expected<void> Resize::operator() (
-		const Resizer::Consider::Expand &mode) const
+template <class T>
+Expected<void> Resize::operator() (const T &mode) const
 {
-	Expected<void> res = mode.checkSpace(m_image, m_sizeMb);
+	Expected<void> res = checkSpace(mode);
 	if (!res.isOk())
 		return res;
 	return mode.execute(m_image, m_sizeMb, m_call, m_gfsAction);
 }
 
-template<class T>
-Expected<void> Resize::operator() (const T &mode) const
+template<> Expected<void> Resize::checkSpace(
+		const Resizer::Gpt<Resizer::Ignore::Expand> &mode) const
 {
-	Expected<void> res = mode.checkSpace(m_image);
-	if (!res.isOk())
-		return res;
-	return mode.execute(m_image, m_sizeMb, m_call, m_gfsAction);
+	return mode.getMode().checkSpace(m_image, m_sizeMb);
+}
+
+template<> Expected<void> Resize::checkSpace(
+		const Resizer::Ignore::Expand &mode) const
+{
+	return mode.checkSpace(m_image, m_sizeMb);
+}
+
+template<> Expected<void> Resize::checkSpace(
+		const Resizer::Consider::Expand &mode) const
+{
+	return mode.checkSpace(m_image, m_sizeMb);
+}
+
+template<class T>
+Expected<void> Resize::checkSpace(const T &mode) const
+{
+	return mode.checkSpace(m_image);
 }
 
 ////////////////////////////////////////////////////////////
@@ -656,7 +920,7 @@ Expected<void> Resize::operator() (const T &mode) const
 
 struct PreConvert
 {
-	PreConvert(const CallAdapter &adapter):
+	explicit PreConvert(const CallAdapter &adapter):
 		m_adapter(adapter)
 	{
 	}
@@ -769,217 +1033,6 @@ private:
 
 } // namespace Visitor
 
-namespace Resizer
-{
-
-mode_type getModeIgnore(const Image::Info &info, quint64 sizeMb)
-{
-	if (info.getVirtualSize() > convertMbToBytes(sizeMb))
-		return Ignore::Shrink();
-	else
-		return Ignore::Expand();
-}
-
-Expected<mode_type> getModeConsider(const Image::Info &info, quint64 sizeMb)
-{
-	ResizeHelper helper(info);
-	Expected<Partition::Unit> lastPartition = helper.getLastPartition();
-	if (lastPartition.isOk())
-	{
-		// Partition-aware resize is safe.
-		if (info.getVirtualSize() > convertMbToBytes(sizeMb))
-			return mode_type(Consider::Shrink());
-		else
-			return mode_type(Consider::Expand());
-	}
-	else if (lastPartition.getCode() == ERR_NO_PARTITIONS)
-	{
-		// Safe to resize ignoring partitions.
-		return getModeIgnore(info, sizeMb);
-	}
-	else
-	{
-		// We may destroy data. Refuse.
-		return Expected<void>(lastPartition);
-	}
-}
-
-////////////////////////////////////////////////////////////
-// Ignore::Shrink
-
-Expected<void> Ignore::Shrink::execute(
-		const Image::Info &image, quint64 sizeMb,
-		const boost::optional<Call> &call,
-		const boost::optional<GuestFS::Action> &gfsAction) const
-{
-	ResizeHelper helper(image, call, gfsAction);
-	CallAdapter adapter(call);
-
-	Expected<QString> tmpPath = helper.createTmpImage(sizeMb);
-	if (!tmpPath.isOk())
-		return tmpPath;
-	BOOST_SCOPE_EXIT(&tmpPath)
-	{
-		QFile::remove(tmpPath.get());
-	} BOOST_SCOPE_EXIT_END
-
-	Expected<void> res;
-	if (!(res = VirtResize(adapter)(image.getFilename(), tmpPath.get())).isOk())
-		return res;
-	adapter.rename(tmpPath.get(), image.getFilename());
-	return res;
-}
-
-Expected<void> Ignore::Shrink::checkSpace(const Image::Info &image) const
-{
-	quint64 avail = getAvailableSpace(image.getFilename());
-	quint64 resultSize = image.getActualSize();
-	// We copy an image without modifyng anything,
-	// so we need equal amount of space.
-	if (resultSize > avail)
-	{
-		return Expected<void>::fromMessage(QString(IDS_ERR_NO_FREE_SPACE)
-		                                   .arg(resultSize).arg(avail));
-	}
-	return Expected<void>();
-}
-
-////////////////////////////////////////////////////////////
-// Ignore::Expand
-
-Expected<void> Ignore::Expand::execute(
-		const Image::Info &image, quint64 sizeMb,
-		const boost::optional<Call> &call) const
-{
-	CallAdapter adapter(call);
-	QStringList args;
-	// This is performed in-place.
-	args << "resize" << image.getFilename() << QString("%1M").arg(sizeMb);
-	int ret = adapter.run(QEMU_IMG, args, NULL, NULL);
-	if (ret)
-	{
-		return Expected<void>::fromMessage(QString(IDS_ERR_SUBPROGRAM_RETURN_CODE)
-		                                   .arg(QEMU_IMG).arg(args.join(" ")).arg(ret));
-	}
-	return Expected<void>();
-
-}
-
-Expected<void> Ignore::Expand::checkSpace(
-		const Image::Info &image, quint64 sizeMb) const
-{
-	quint64 avail = getAvailableSpace(image.getFilename());
-	qint64 delta = (qint64)convertMbToBytes(sizeMb) - (qint64)image.getVirtualSize();
-	Q_ASSERT(delta > 0);
-	// We resize in-place, so we should consider only additional space.
-	if (delta > 0 && (quint64)delta > avail)
-		return Expected<void>::fromMessage(QString(IDS_ERR_NO_FREE_SPACE)
-		                                   .arg(delta).arg(avail));
-	return Expected<void>();
-}
-
-////////////////////////////////////////////////////////////
-// Consider::Shrink
-
-Expected<void> Consider::Shrink::execute(
-		const Image::Info &image, quint64 sizeMb,
-		const boost::optional<Call> &call,
-		const boost::optional<GuestFS::Action> &gfsAction) const
-{
-	ResizeHelper helper(image, call, gfsAction);
-	CallAdapter adapter(call);
-
-	Expected<QString> tmpPath = helper.createTmpImage(sizeMb);
-	if (!tmpPath.isOk())
-		return tmpPath;
-	BOOST_SCOPE_EXIT(&tmpPath)
-	{
-		QFile::remove(tmpPath.get());
-	} BOOST_SCOPE_EXIT_END
-
-	Expected<void> res;
-	if (!(res = helper.shrinkFSIfNeeded(sizeMb)).isOk())
-		return res;
-	Expected<Partition::Unit> lastPartition = helper.getLastPartition();
-	if (!lastPartition.isOk())
-		return lastPartition;
-	if (!(res = VirtResize(adapter).shrink(lastPartition.get().getName())
-				(image.getFilename(), tmpPath.get())).isOk())
-		return res;
-	adapter.rename(tmpPath.get(), image.getFilename());
-	return res;
-}
-
-Expected<void> Consider::Shrink::checkSpace(const Image::Info &image) const
-{
-	quint64 avail = getAvailableSpace(image.getFilename());
-	// Heuristic estimates: we create a copy of image.
-	quint64 resultSize = image.getActualSize();
-	if (resultSize > avail)
-	{
-		return Expected<void>::fromMessage(QString(IDS_ERR_NO_FREE_SPACE)
-		                                   .arg(resultSize).arg(avail));
-	}
-	return Expected<void>();
-}
-
-////////////////////////////////////////////////////////////
-// Consider::Expand
-
-Expected<void> Consider::Expand::execute(
-		const Image::Info &image, quint64 sizeMb,
-		const boost::optional<Call> &call,
-		const boost::optional<GuestFS::Action> &gfsAction) const
-{
-	// TODO: Implement in-place.
-	ResizeHelper helper(image, call, gfsAction);
-	CallAdapter adapter(call);
-
-	// Create overlay to operate on.
-	Expected<QString> tmpPath = helper.createTmpImage(sizeMb, image.getFilename());
-	if (!tmpPath.isOk())
-		return tmpPath;
-	BOOST_SCOPE_EXIT(&tmpPath)
-	{
-		QFile::remove(tmpPath.get());
-	} BOOST_SCOPE_EXIT_END
-
-	Expected<void> res;
-	Expected<Wrapper> gfs = helper.getGFS(true, tmpPath.get());
-	if (!gfs.isOk())
-		return gfs;
-
-	// Resize partition table, partition and fs.
-	if (!(res = helper.expandToFit(sizeMb, gfs.get())).isOk())
-		return res;
-
-	// External-merge overlay into original image.
-	if (!(res = helper.mergeIntoPrevious(tmpPath.get())).isOk())
-		return res;
-
-	// External merge removes backing images and leaves only top-most one.
-	// We need original image, so we rename the result.
-	adapter.rename(tmpPath.get(), image.getFilename());
-	return res;
-}
-
-Expected<void> Consider::Expand::checkSpace(
-		const Image::Info &image, quint64 sizeMb) const
-{
-	quint64 avail = getAvailableSpace(image.getFilename());
-	// Heuristic estimates: we only spend space for filesystem expanding.
-	const double FS_OVERHEAD = 0.05;
-	quint64 resultSize = (convertMbToBytes(sizeMb)) * FS_OVERHEAD;
-	if (resultSize > avail)
-	{
-		return Expected<void>::fromMessage(QString(IDS_ERR_NO_FREE_SPACE)
-		                                   .arg(resultSize).arg(avail));
-	}
-	return Expected<void>();
-}
-
-} // namespace Resizer
-
 ////////////////////////////////////////////////////////////
 // Resize
 
@@ -995,21 +1048,15 @@ Expected<void> Resize::execute() const
 	if (convertMbToBytes(m_sizeMb) == snapshotChain.getList().last().getVirtualSize())
 		return Expected<void>();
 
-	Resizer::mode_type mode;
-	if (m_resizeLastPartition)
-	{
-		Expected<Resizer::mode_type> modeRes = Resizer::getModeConsider(
-				snapshotChain.getList().last(), m_sizeMb);
-		if (!modeRes.isOk())
-			return modeRes;
-		mode = modeRes.get();
-	}
-	else
-		mode = Resizer::getModeIgnore(snapshotChain.getList().last(), m_sizeMb);
+	Expected<Resizer::mode_type> mode = m_resizeLastPartition ?
+		Resizer::getModeConsider(snapshotChain.getList().last(), m_sizeMb) :
+		Resizer::getModeIgnore(snapshotChain.getList().last(), m_sizeMb);
+	if (!mode.isOk())
+		return mode;
 
 	return boost::apply_visitor(Visitor::Resize(
 				snapshotChain.getList().last(),
-				m_sizeMb, m_call, m_gfsAction), mode);
+				m_sizeMb, m_call, m_gfsAction), mode.get());
 }
 
 ////////////////////////////////////////////////////////////
