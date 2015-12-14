@@ -103,6 +103,153 @@ int getPartIndex(const QString &partition)
 
 } // namespace
 
+namespace Visitor
+{
+
+////////////////////////////////////////////////////////////
+// MinSize
+
+struct MinSize: boost::static_visitor<Expected<quint64> >
+{
+	MinSize(guestfs_h *g, const QString &name, const Helper &helper):
+		m_g(g), m_name(name), m_helper(helper)
+	{
+	}
+
+	template <class T>
+	Expected<quint64> operator() (const T &fs) const;
+
+private:
+	guestfs_h *m_g;
+	QString m_name;
+	Helper m_helper;
+};
+
+template<> Expected<quint64> MinSize::operator() (const Ext &fs) const
+{
+	Q_UNUSED(fs);
+	Expected<struct statvfs> stats = m_helper.getFilesystemStats(m_name);
+	if (!stats.isOk())
+		return stats;
+	return Ext(m_g, m_name).getMinSize(stats.get());
+}
+
+template<> Expected<quint64> MinSize::operator() (const Ntfs &fs) const
+{
+	Q_UNUSED(fs);
+	return Ntfs(m_g, m_name).getMinSize();
+}
+
+template<> Expected<quint64> MinSize::operator() (const Btrfs &fs) const
+{
+	Q_UNUSED(fs);
+	return Btrfs(m_g, m_name).getMinSize();
+}
+
+template<> Expected<quint64> MinSize::operator() (const Xfs &fs) const
+{
+	Q_UNUSED(fs);
+	return Xfs(m_g, m_name).getMinSize();
+}
+
+template<class T> Expected<quint64> MinSize::operator() (const T &fs) const
+{
+	Q_UNUSED(fs);
+	return Expected<quint64>::fromMessage(
+				QString(IDS_ERR_FS_UNSUPPORTED), ERR_UNSUPPORTED_FS);
+}
+
+////////////////////////////////////////////////////////////
+// Resize
+
+struct Resize: boost::static_visitor<Expected<void> >
+{
+	Resize(guestfs_h *g, const QString &name, quint64 newSize,
+		   const boost::optional<Action> &gfsAction):
+		m_g(g), m_name(name), m_newSize(newSize), m_gfsAction(gfsAction)
+	{
+	}
+
+	template <class T>
+	Expected<void> operator() (const T &fs) const
+	{
+		Q_UNUSED(fs);
+		Expected<int> ret = execute<T>();
+		if (!ret.isOk())
+			return ret;
+		if (ret.get())
+			return Expected<void>::fromMessage("Filesystem resize failed", ret.get());
+		return Expected<void>();
+	}
+
+private:
+	template <class T> Expected<int> execute() const;
+
+	guestfs_h *m_g;
+	QString m_name;
+	quint64 m_newSize;
+	boost::optional<Action> m_gfsAction;
+};
+
+template<> Expected<int> Resize::execute<Ext>() const
+{
+	Logger::info(QString("resize2fs %1 %2").arg(m_name).arg(m_newSize));
+	return (bool)m_gfsAction ? m_gfsAction->get<Ext>(m_g, m_name).resize(m_newSize) : 0;
+}
+
+template<> Expected<int> Resize::execute<Ntfs>() const
+{
+	Logger::info(QString("resize2fs %1 %2").arg(m_name).arg(m_newSize));
+	return (bool)m_gfsAction ? m_gfsAction->get<Ntfs>(m_g, m_name).resize(m_newSize) : 0;
+}
+
+template<> Expected<int> Resize::execute<Btrfs>() const
+{
+	Logger::info(QString("btrfs filesystem resize %1 /").arg(m_newSize));
+	return (bool)m_gfsAction ? m_gfsAction->get<Btrfs>(m_g, m_name).resize(m_newSize) : 0;
+}
+
+template<> Expected<int> Resize::execute<Xfs>() const
+{
+	Logger::info(QString("xfs_growfs -d /"));
+	return (bool)m_gfsAction ? m_gfsAction->get<Xfs>(m_g, m_name).resize() : 0;
+}
+
+template<class T> Expected<int> Resize::execute() const
+{
+	return Expected<int>::fromMessage(
+				QString(IDS_ERR_FS_UNSUPPORTED), ERR_UNSUPPORTED_FS);
+}
+
+////////////////////////////////////////////////////////////
+// Same
+
+template <class T>
+struct Same: boost::static_visitor<bool>
+{
+	bool operator() (const T &fs) const;
+
+	template <class U>
+	bool operator() (const U &fs) const;
+};
+
+template <class T>
+bool Same<T>::operator() (const T &fs) const
+{
+	Q_UNUSED(fs);
+	return true;
+}
+
+template <class T>
+template <class U>
+bool Same<T>::template operator() (const U &fs) const
+{
+	Q_UNUSED(fs);
+	return false;
+}
+
+} // namespace Visitor
+
 namespace Partition
 {
 
@@ -169,36 +316,22 @@ Expected<Stats> Unit::getStats() const
 
 Expected<quint64> Unit::getMinSize() const
 {
-	Expected<QString> fs = getFS();
+	Expected<fs_type> fs = getFS();
 	if (!fs.isOk())
 		return fs;
 	return getMinSize(fs.get());
 }
 
-Expected<quint64> Unit::getMinSize(const QString &fs) const
+Expected<quint64> Unit::getMinSize(const fs_type &fs) const
 {
-	if (fs == "ext2" || fs == "ext3" || fs == "ext4")
-	{
-		Expected<struct statvfs> stats = getFilesystemStats();
-		if (!stats.isOk())
-			return stats;
-		return Ext(m_g, m_name).getMinSize(stats.get());
-	}
-	else if (fs == "ntfs")
-		return Ntfs(m_g, m_name).getMinSize();
-	else if (fs == "btrfs")
-		return Btrfs(m_g, m_name).getMinSize();
-	else if (fs == "xfs")
-		return Xfs(m_g, m_name).getMinSize();
-	else
-		return Expected<quint64>::fromMessage(QString(IDS_ERR_FS_UNSUPPORTED).arg(fs));
+	return boost::apply_visitor(Visitor::MinSize(m_g, m_name, m_helper), fs);
 }
 
-Expected<QString> Unit::getFS() const
+Expected<fs_type> Unit::getFS() const
 {
 	char **filesystems = guestfs_list_filesystems(m_g);
 	if (!filesystems)
-		return Expected<QString>::fromMessage(IDS_ERR_CANNOT_GET_PART_FS);
+		return Expected<fs_type>::fromMessage(IDS_ERR_CANNOT_GET_PART_FS);
 
 	QString fs;
 	for (char **cur = filesystems; *cur != NULL; cur += 2)
@@ -211,42 +344,27 @@ Expected<QString> Unit::getFS() const
 	free(filesystems);
 
 	if (fs.isEmpty())
-		return Expected<QString>::fromMessage(IDS_ERR_CANNOT_GET_PART_FS);
+	{
+		// guestfs does not knwon such partition
+		return Expected<fs_type>::fromMessage(
+				IDS_ERR_CANNOT_GET_PART_FS);
+	}
 
-	return fs;
+	if (fs == "ext2" || fs == "ext3" || fs == "ext4")
+		return fs_type(Ext());
+	else if (fs == "ntfs")
+		return fs_type(Ntfs());
+	else if (fs == "btrfs")
+		return fs_type(Btrfs());
+	else if (fs == "xfs")
+		return fs_type(Xfs());
+	else
+		return fs_type(Unknown());
 }
 
 Expected<struct statvfs> Unit::getFilesystemStats() const
 {
-	int ret;
-	if ((ret = guestfs_mount_ro(m_g, QSTR2UTF8(m_name), "/")))
-		return Expected<struct statvfs>::fromMessage(IDS_ERR_CANNOT_MOUNT, ret);
-
-	struct guestfs_statvfs *g_stat = guestfs_statvfs(m_g, "/");
-
-	guestfs_umount(m_g, "/");
-
-	struct statvfs stat;
-	if (g_stat)
-	{
-		stat.f_bsize = g_stat->bsize;
-		stat.f_frsize = g_stat->frsize;
-		stat.f_blocks = g_stat->blocks;
-		stat.f_bfree = g_stat->bfree;
-		stat.f_bavail = g_stat->bavail;
-		stat.f_files = g_stat->files;
-		stat.f_ffree = g_stat->ffree;
-		stat.f_favail = g_stat->favail;
-		stat.f_fsid = g_stat->fsid;
-		stat.f_flag = g_stat->flag;
-		stat.f_namemax = g_stat->namemax;
-	}
-
-	if (!g_stat)
-		return Expected<struct statvfs>::fromMessage("Unable to get filesystem stats");
-
-	guestfs_free_statvfs(g_stat);
-	return stat;
+	return m_helper.getFilesystemStats(m_name);
 }
 
 Expected<void> Unit::shrinkFilesystem(quint64 dec) const
@@ -265,15 +383,14 @@ Expected<void> Unit::shrinkFilesystem(quint64 dec) const
 
 Expected<void> Unit::resizeFilesystem(quint64 newSize) const
 {
-	Expected<QString> fs = getFS();
+	Expected<fs_type> fs = getFS();
 	if (!fs.isOk())
 		return fs;
 	return resizeFilesystem(newSize, fs.get());
 }
 
-Expected<void> Unit::resizeFilesystem(quint64 newSize, const QString &fs) const
+Expected<void> Unit::resizeFilesystem(quint64 newSize, const fs_type &fs) const
 {
-	int ret;
 	Expected<quint64> minSize = getMinSize(fs);
 	if (!minSize.isOk())
 		return minSize;
@@ -281,32 +398,15 @@ Expected<void> Unit::resizeFilesystem(quint64 newSize, const QString &fs) const
 		return Expected<void>::fromMessage(QString(IDS_ERR_NO_FS_FREE_SPACE)
 							   .arg(newSize).arg(minSize.get()).arg(minSize.get() - newSize));
 
-	if (fs == "ext2" || fs == "ext3" || fs == "ext4")
-	{
-		Logger::info(QString("resize2fs %1 %2").arg(m_name).arg(newSize));
-		ret = (bool)m_gfsAction ? m_gfsAction->get<Ext>(m_g, m_name).resize(newSize) : 0;
-	}
-	else if (fs == "ntfs")
-	{
-		Logger::info(QString("ntfsresize -f %1 --size %2").arg(m_name).arg(newSize));
-		ret = (bool)m_gfsAction ? m_gfsAction->get<Ntfs>(m_g, m_name).resize(newSize) : 0;
-	}
-	else if (fs == "btrfs")
-	{
-		Logger::info(QString("btrfs filesystem resize %1 /").arg(newSize));
-		ret = (bool)m_gfsAction ? m_gfsAction->get<Btrfs>(m_g, m_name).resize(newSize) : 0;
-	}
-	else if (fs == "xfs")
-	{
-		Logger::info(QString("xfs_growfs -d /").arg(newSize));
-		ret = (bool)m_gfsAction ? m_gfsAction->get<Xfs>(m_g, m_name).resize() : 0;
-	}
-	else
-		return Expected<void>::fromMessage(QString(IDS_ERR_FS_UNSUPPORTED).arg(fs));
+	return boost::apply_visitor(Visitor::Resize(m_g, m_name, newSize, m_gfsAction), fs);
+}
 
-	if (ret)
-		return Expected<void>::fromMessage("Filesystem resize failed", ret);
-	return Expected<void>();
+Expected<bool> Unit::isFilesystemSupported() const
+{
+	Expected<fs_type> fs = getFS();
+	if (!fs.isOk())
+		return fs;
+	return !boost::apply_visitor(Visitor::Same<Unknown>(), fs.get());
 }
 
 int Unit::getIndex() const
@@ -690,6 +790,39 @@ Expected<QString> Helper::getPartitionTable() const
 
 	return Expected<QString>::fromMessage(
 			QString("Unknown partition table type: '%1'").arg(table));
+}
+
+Expected<struct statvfs> Helper::getFilesystemStats(const QString &name) const
+{
+	int ret;
+	if ((ret = guestfs_mount_ro(m_g, QSTR2UTF8(name), "/")))
+		return Expected<struct statvfs>::fromMessage(IDS_ERR_CANNOT_MOUNT, ret);
+
+	struct guestfs_statvfs *g_stat = guestfs_statvfs(m_g, "/");
+
+	guestfs_umount(m_g, "/");
+
+	struct statvfs stat;
+	if (g_stat)
+	{
+		stat.f_bsize = g_stat->bsize;
+		stat.f_frsize = g_stat->frsize;
+		stat.f_blocks = g_stat->blocks;
+		stat.f_bfree = g_stat->bfree;
+		stat.f_bavail = g_stat->bavail;
+		stat.f_files = g_stat->files;
+		stat.f_ffree = g_stat->ffree;
+		stat.f_favail = g_stat->favail;
+		stat.f_fsid = g_stat->fsid;
+		stat.f_flag = g_stat->flag;
+		stat.f_namemax = g_stat->namemax;
+	}
+
+	if (!g_stat)
+		return Expected<struct statvfs>::fromMessage("Unable to get filesystem stats");
+
+	guestfs_free_statvfs(g_stat);
+	return stat;
 }
 
 ////////////////////////////////////////////////////////////
