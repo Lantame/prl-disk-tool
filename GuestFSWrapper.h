@@ -213,13 +213,14 @@ namespace Attribute
 
 struct Gpt
 {
-	Gpt(const QString &name, const QString &gptType):
-		m_name(name), m_gptType(gptType)
+	Gpt(const QString &name, const QString &gptType, const QString &gptGuid):
+		m_name(name), m_gptType(gptType), m_gptGuid(gptGuid)
 	{
 	}
 
 	QString m_name;
 	QString m_gptType;
+	QString m_gptGuid;
 };
 
 ////////////////////////////////////////////////////////////

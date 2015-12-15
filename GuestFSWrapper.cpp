@@ -429,9 +429,17 @@ Expected<Attribute::Gpt> Unit::getAttributesInternal() const
 	if (!gptType)
 		return Expected<Attribute::Gpt>::fromMessage("Unable to get GPT type");
 
-	Attribute::Gpt attrs(name, gptType);
+	char *gptGuid = guestfs_part_get_gpt_guid(m_g, GUESTFS_DEVICE, getIndex());
+	if (!gptGuid)
+	{
+		return Expected<Attribute::Gpt>::fromMessage(
+				"Unable to get GPT partition GUID");
+	}
+
+	Attribute::Gpt attrs(name, gptType, gptGuid);
 	free(name);
 	free(gptType);
+	free(gptGuid);
 	return attrs;
 }
 
@@ -517,6 +525,10 @@ Expected<void> Unit::apply(const Attribute::Aggregate &attrs) const
 		if ((ret = guestfs_part_set_gpt_type(
 						m_g, GUESTFS_DEVICE, getIndex(), QSTR2UTF8(typedAttrs->m_gptType))))
 			return Expected<void>::fromMessage("Unable to set gpt type", ret);
+
+		if ((ret = guestfs_part_set_gpt_guid(
+						m_g, GUESTFS_DEVICE, getIndex(), QSTR2UTF8(typedAttrs->m_gptGuid))))
+			return Expected<void>::fromMessage("Unable to set gpt GUID", ret);
 	}
 	return Expected<void>();
 }
