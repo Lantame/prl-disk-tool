@@ -36,6 +36,7 @@
 
 extern const char QEMU_IMG[] = "/usr/bin/qemu-img";
 extern const char DISK_FORMAT[] = "qcow2";
+extern const char DESCRIPTOR[] = "DiskDescriptor.xml";
 
 bool Logger::s_verbose = false;
 
