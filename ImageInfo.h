@@ -151,6 +151,26 @@ private:
 	QString m_dirPath;
 };
 
+////////////////////////////////////////////////////////////
+// Unit
+
+struct Unit
+{
+	Unit(const QString &diskPath):
+		m_diskPath(diskPath)
+	{
+	}
+
+	Expected<Image::Chain> getChain() const;
+	Expected<Image::Chain> getChainNoSnapshots() const;
+
+	Expected<QStringList> getSnapshots() const;
+	Expected<void> checkSnapshots() const;
+
+private:
+	QString m_diskPath;
+};
+
 } // namespace Image
 
 #endif // IMAGE_INFO_H
