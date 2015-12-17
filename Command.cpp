@@ -45,6 +45,8 @@ using namespace GuestFS;
 namespace
 {
 
+const char DESCRIPTOR[] = "DiskDescriptor.xml";
+
 // Functions
 
 /** Get size unit type by letter */
@@ -150,15 +152,16 @@ bool applyDiskPath(const QString &src, QString &dst)
 		return false;
 	dst = src;
 
-	// For ct ploop, it may contain .hdd dir or image files.
-	// For vm image, .hdd file only.
-	if (!fileInfo.dir().isAbsolute())
-	{
-		if ((fileInfo.isFile() && fileInfo.fileName().endsWith(".hdd")) || fileInfo.isDir())
-			dst = fileInfo.absoluteFilePath();
-		else
-			dst = fileInfo.dir().absolutePath();
-	}
+	// For ct ploop, it may contain dir with DiskDescriptor.xml
+	// or a file near DiskDescriptor.xml.
+	// For vm image, a file only.
+	if ((fileInfo.isFile() && !fileInfo.dir().exists(DESCRIPTOR)) || // vm image file
+		(fileInfo.isDir() && QDir(fileInfo.filePath()).exists(DESCRIPTOR))) // ct image dir
+		dst = fileInfo.absoluteFilePath();
+	else if (fileInfo.isFile() && fileInfo.dir().exists(DESCRIPTOR)) // file in ct image dir
+		dst = fileInfo.dir().absolutePath();
+	else
+		return false;
 	if (dst.endsWith("/"))
 		dst = dst.left(dst.length()-1);
 
@@ -172,8 +175,7 @@ bool isPloop(const QString &path)
 
 	/* FIXME: check by CT layout, maybe some hint in the DiskDescriptor.xml */
 	if (QFileInfo(path).exists() &&
-			QFileInfo(path + "/DiskDescriptor.xml").exists() &&
-			QFileInfo(path + "/../ve.conf").exists())
+			QFileInfo(QString("%1/%2").arg(path, DESCRIPTOR)).exists())
 		return true;
 
 	return false;

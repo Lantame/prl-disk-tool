@@ -59,6 +59,7 @@ enum SizeUnitType
 
 extern const char QEMU_IMG[];
 extern const char DISK_FORMAT[];
+extern const char DESCRIPTOR[];
 
 int run_prg(const char *name, const QStringList &lstArgs, QByteArray *out, QByteArray *err);
 

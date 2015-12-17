@@ -40,11 +40,10 @@ namespace
 {
 
 char PLOOP[] = "/usr/sbin/ploop";
-char DESCRIPTOR[] = "/DiskDescriptor.xml";
 
 QString getDescriptor(const QString &path)
 {
-	return path + DESCRIPTOR;
+	return QString("%1/%2").arg(path, DESCRIPTOR);
 }
 
 } // namespace
