@@ -706,6 +706,16 @@ Expected<void> Consider::Shrink::execute(
 		QFile::remove(tmpPath.get());
 	} BOOST_SCOPE_EXIT_END
 
+	// Perform filesystem resize on snapshot.
+	Expected<QString> snapshot = Image::Unit(image.getFilename()).createSnapshot(adapter);
+	if (!snapshot.isOk())
+		return snapshot;
+	BOOST_SCOPE_EXIT(&image, &snapshot, &adapter)
+	{
+		Image::Unit(image.getFilename()).applySnapshot(snapshot.get(), adapter);
+		Image::Unit(image.getFilename()).deleteSnapshot(snapshot.get(), adapter);
+	} BOOST_SCOPE_EXIT_END
+
 	Expected<void> res;
 	if (!(res = helper.shrinkFSIfNeeded(sizeMb)).isOk())
 		return res;
@@ -1270,14 +1280,9 @@ Expected<void> Internal::execute() const
 
 	Q_FOREACH(const QString &id, snapshots.get())
 	{
-		QStringList args;
-		args << "snapshot" << "-d" << id << getDiskPath();
-		int ret;
-		if ((ret = m_adapter.run(QEMU_IMG, args, NULL, NULL)))
-		{
-			return Expected<void>::fromMessage(QString(IDS_ERR_SUBPROGRAM_RETURN_CODE)
-											   .arg(QEMU_IMG).arg(args.join(" ")).arg(ret));
-		}
+		Expected<void> res = Image::Unit(getDiskPath()).deleteSnapshot(id, m_adapter);
+		if (!res.isOk())
+			return res;
 	}
 
 	return Expected<void>();

@@ -192,7 +192,7 @@ Expected<QStringList> Unit::getSnapshots() const
 	}
 
 	//                   | ID  |     TAG        | VMSIZE|   DATE                |
-	QRegExp snapshotRE("^(\\d+)\\s+(\\S|\\S.*\\S)\\s+\\d+\\s+\\d{4}-\\d{2}-\\d{2}");
+	QRegExp snapshotRE("^(\\d+)\\s+(.*)\\s+\\d+\\s+\\d{4}-\\d{2}-\\d{2}");
 	QStringList lines = QString(out).split('\n');
 	QStringList snapshots;
 	Q_FOREACH(const QString &line, lines)
@@ -211,5 +211,47 @@ Expected<void> Unit::checkSnapshots() const
 		return snapshots;
 	if (!snapshots.get().isEmpty())
 		return Expected<void>::fromMessage(IDS_ERR_HAS_INTERNAL_SNAPSHOTS);
+	return Expected<void>();
+}
+
+Expected<QString> Unit::createSnapshot(const CallAdapter &adapter) const
+{
+	QStringList args;
+	args << "snapshot" << "-c" << "" << m_diskPath;
+	int ret;
+	if ((ret = adapter.run(QEMU_IMG, args, NULL, NULL)))
+	{
+		return Expected<QString>::fromMessage(QString(IDS_ERR_SUBPROGRAM_RETURN_CODE)
+										      .arg(QEMU_IMG).arg(args.join(" ")).arg(ret));
+	}
+	Expected<QStringList> snapshots = getSnapshots();
+	if (!snapshots.isOk())
+		return snapshots;
+	return snapshots.get().last();
+}
+
+Expected<void> Unit::applySnapshot(const QString &id, const CallAdapter &adapter) const
+{
+	QStringList args;
+	args << "snapshot" << "-a" << id << m_diskPath;
+	int ret;
+	if ((ret = adapter.run(QEMU_IMG, args, NULL, NULL)))
+	{
+		return Expected<void>::fromMessage(QString(IDS_ERR_SUBPROGRAM_RETURN_CODE)
+										   .arg(QEMU_IMG).arg(args.join(" ")).arg(ret));
+	}
+	return Expected<void>();
+}
+
+Expected<void> Unit::deleteSnapshot(const QString &id, const CallAdapter &adapter) const
+{
+	QStringList args;
+	args << "snapshot" << "-d" << id << m_diskPath;
+	int ret;
+	if ((ret = adapter.run(QEMU_IMG, args, NULL, NULL)))
+	{
+		return Expected<void>::fromMessage(QString(IDS_ERR_SUBPROGRAM_RETURN_CODE)
+										   .arg(QEMU_IMG).arg(args.join(" ")).arg(ret));
+	}
 	return Expected<void>();
 }

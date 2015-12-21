@@ -37,6 +37,7 @@
 #include <boost/property_tree/ptree.hpp>
 
 #include "Expected.h"
+#include "Util.h"
 
 namespace Image
 {
@@ -166,6 +167,9 @@ struct Unit
 
 	Expected<QStringList> getSnapshots() const;
 	Expected<void> checkSnapshots() const;
+	Expected<QString> createSnapshot(const CallAdapter &adapter) const;
+	Expected<void> applySnapshot(const QString &id, const CallAdapter &adapter) const;
+	Expected<void> deleteSnapshot(const QString &id, const CallAdapter &adapter) const;
 
 private:
 	QString m_diskPath;
