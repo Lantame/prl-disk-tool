@@ -203,6 +203,12 @@ struct VirtResize
 		return *this;
 	}
 
+	VirtResize& resizeForce(const QString &partition, quint64 size)
+	{
+		m_args << "--resize-force" << QString("%1=%2b").arg(partition).arg(size);
+		return *this;
+	}
+
 	Expected<void> operator() (const QString &src, const QString &dst)
 	{
 		m_args << "--machine-readable" << "--ntfsresize-force" << src << dst;
@@ -359,34 +365,31 @@ struct ResizeHelper
 
 	Expected<void> shrinkFSIfNeeded(quint64 mb)
 	{
-		qint64 delta = (qint64)convertMbToBytes(mb) - (qint64)m_image.getVirtualSize();
-		// GuestFS handle wrapper.
+		// GuestFS handle wrapper (we will need to write).
 		Expected<Wrapper> gfs = getGFS(true);
 		if (!gfs.isOk())
 			return gfs;
 		Expected<Partition::Unit> lastPartition = gfs.get().getLastPartition();
 		if (!lastPartition.isOk())
 			return lastPartition;
-		Expected<Partition::Stats> partStats = lastPartition.get().getStats();
-		if (!partStats.isOk())
-			return partStats;
-		// Free space after last partition.
-		quint64 tail = m_image.getVirtualSize() - partStats.get().end - 1;
-		Expected<quint64> overhead = gfs.get().getVirtResizeOverhead();
-		if (!overhead.isOk())
-			return overhead;
-		qint64 fsDelta = delta - overhead.get() + tail;
-		Logger::info(QString("delta: %1 overhead: %2 tail: %3 fs delta: %4")
-					 .arg(delta).arg(overhead.get()).arg(tail).arg(fsDelta));
-
+		Expected<qint64> fsDelta = calculateFSDelta(mb, lastPartition.get());
 		// NB: if delta = 1M and overhead = 3M we still need to shrink FS.
-		if (fsDelta < 0)
+		if (fsDelta.get() < 0)
 		{
 			// Shrinking empty space is not enough.
 			// We have to resize filesystem ourselves.
-			return lastPartition.get().shrinkFilesystem(-fsDelta);
+			return lastPartition.get().shrinkFilesystem(-fsDelta.get());
 		}
 		return Expected<void>();
+	}
+
+	Expected<quint64> getNewFSSize(quint64 mb, const Partition::Unit &lastPartition)
+	{
+		Expected<qint64> fsDelta = calculateFSDelta(mb, lastPartition);
+		Expected<Partition::Stats> partStats = lastPartition.getStats();
+		if (!partStats.isOk())
+			return partStats;
+		return partStats.get().size + fsDelta.get();
 	}
 
 	/* Expands partition table(if needed), last partition and its filesystem. */
@@ -542,6 +545,27 @@ private:
 		newStats.end = (endSector + 1) * sectorSize - 1;
 		newStats.size = newStats.end - newStats.start + 1;
 		return newStats;
+	}
+
+	Expected<qint64> calculateFSDelta(quint64 mb, const Partition::Unit &lastPartition)
+	{
+		Expected<Wrapper> gfs = getGFS();
+		if (!gfs.isOk())
+			return gfs;
+
+		qint64 delta = (qint64)convertMbToBytes(mb) - (qint64)m_image.getVirtualSize();
+		Expected<Partition::Stats> partStats = lastPartition.getStats();
+		if (!partStats.isOk())
+			return partStats;
+		// Free space after last partition.
+		quint64 tail = m_image.getVirtualSize() - partStats.get().end - 1;
+		Expected<quint64> overhead = gfs.get().getVirtResizeOverhead();
+		if (!overhead.isOk())
+			return overhead;
+		qint64 fsDelta = delta - overhead.get() + tail;
+		Logger::info(QString("delta: %1 overhead: %2 tail: %3 fs delta: %4")
+					 .arg(delta).arg(overhead.get()).arg(tail).arg(fsDelta));
+		return fsDelta;
 	}
 
 private:
@@ -722,8 +746,18 @@ Expected<void> Consider::Shrink::execute(
 	Expected<Partition::Unit> lastPartition = helper.getLastPartition();
 	if (!lastPartition.isOk())
 		return lastPartition;
-	if (!(res = VirtResize(adapter).shrink(lastPartition.get().getName())
-				(image.getFilename(), tmpPath.get())).isOk())
+	const Swap* fs = lastPartition.get().getFilesystem<Swap>();
+	VirtResize resize(adapter);
+	if (fs != NULL)
+	{
+		Expected<quint64> newSize = helper.getNewFSSize(sizeMb, lastPartition.get());
+		if (!newSize.isOk())
+			return newSize;
+		resize.resizeForce(lastPartition.get().getName(), newSize.get());
+	}
+	else
+		resize.shrink(lastPartition.get().getName());
+	if (!(res = resize(image.getFilename(), tmpPath.get())).isOk())
 		return res;
 	adapter.rename(tmpPath.get(), image.getFilename());
 	return res;
@@ -750,7 +784,6 @@ Expected<void> Consider::Expand::execute(
 		const boost::optional<Call> &call,
 		const boost::optional<GuestFS::Action> &gfsAction) const
 {
-	// TODO: Implement in-place.
 	ResizeHelper helper(image, call, gfsAction);
 	CallAdapter adapter(call);
 

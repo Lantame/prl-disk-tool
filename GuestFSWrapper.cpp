@@ -46,6 +46,7 @@ enum {GPT_START_SECTS = 64};
 enum {GPT_END_SECTS = 64};
 enum {ALIGNMENT_SECTS = 128};
 enum {MAX_MBR_PRIMARY = 4};
+enum {MIN_SWAP_SIZE = 40 * 1024}; // mkswap asks for 40KiB = 10 pages.
 
 quint64 ceilTo(quint64 bytes, quint64 div)
 {
@@ -101,6 +102,21 @@ int getPartIndex(const QString &partition)
 	return partIndex;
 }
 
+GuestFS::fs_type parseFilesystem(const QString &fs)
+{
+	if (fs == "ext2" || fs == "ext3" || fs == "ext4")
+		return fs_type(Ext());
+	else if (fs == "ntfs")
+		return fs_type(Ntfs());
+	else if (fs == "btrfs")
+		return fs_type(Btrfs());
+	else if (fs == "xfs")
+		return fs_type(Xfs());
+	else if (fs == "swap")
+		return fs_type(Swap());
+	return fs_type(Unknown());
+}
+
 } // namespace
 
 namespace Visitor
@@ -150,6 +166,12 @@ template<> Expected<quint64> MinSize::operator() (const Xfs &fs) const
 {
 	Q_UNUSED(fs);
 	return Xfs(m_g, m_name).getMinSize();
+}
+
+template<> Expected<quint64> MinSize::operator() (const Swap &fs) const
+{
+	Q_UNUSED(fs);
+	return Swap::getMinSize();
 }
 
 template<class T> Expected<quint64> MinSize::operator() (const T &fs) const
@@ -215,37 +237,16 @@ template<> Expected<int> Resize::execute<Xfs>() const
 	return (bool)m_gfsAction ? m_gfsAction->get<Xfs>(m_g, m_name).resize() : 0;
 }
 
+template<> Expected<int> Resize::execute<Swap>() const
+{
+	Logger::info(QString("swap resize (ignore)"));
+	return 0;
+}
+
 template<class T> Expected<int> Resize::execute() const
 {
 	return Expected<int>::fromMessage(
 				QString(IDS_ERR_FS_UNSUPPORTED), ERR_UNSUPPORTED_FS);
-}
-
-////////////////////////////////////////////////////////////
-// Same
-
-template <class T>
-struct Same: boost::static_visitor<bool>
-{
-	bool operator() (const T &fs) const;
-
-	template <class U>
-	bool operator() (const U &fs) const;
-};
-
-template <class T>
-bool Same<T>::operator() (const T &fs) const
-{
-	Q_UNUSED(fs);
-	return true;
-}
-
-template <class T>
-template <class U>
-bool Same<T>::template operator() (const U &fs) const
-{
-	Q_UNUSED(fs);
-	return false;
 }
 
 } // namespace Visitor
@@ -316,56 +317,20 @@ Expected<Stats> Unit::getStats() const
 
 Expected<quint64> Unit::getMinSize() const
 {
-	Expected<fs_type> fs = getFS();
-	if (!fs.isOk())
-		return fs;
-	return getMinSize(fs.get());
-}
-
-Expected<quint64> Unit::getMinSize(const fs_type &fs) const
-{
-	return boost::apply_visitor(Visitor::MinSize(m_g, m_name, m_helper), fs);
-}
-
-Expected<fs_type> Unit::getFS() const
-{
-	char **filesystems = guestfs_list_filesystems(m_g);
-	if (!filesystems)
-		return Expected<fs_type>::fromMessage(IDS_ERR_CANNOT_GET_PART_FS);
-
-	QString fs;
-	for (char **cur = filesystems; *cur != NULL; cur += 2)
-	{
-		if (m_name == *cur)
-			fs = *(cur + 1);
-		free(*cur);
-		free(*(cur + 1));
-	}
-	free(filesystems);
-
-	if (fs.isEmpty())
-	{
-		// guestfs does not knwon such partition
-		return Expected<fs_type>::fromMessage(
-				IDS_ERR_CANNOT_GET_PART_FS);
-	}
-
-	if (fs == "ext2" || fs == "ext3" || fs == "ext4")
-		return fs_type(Ext());
-	else if (fs == "ntfs")
-		return fs_type(Ntfs());
-	else if (fs == "btrfs")
-		return fs_type(Btrfs());
-	else if (fs == "xfs")
-		return fs_type(Xfs());
-	else
-		return fs_type(Unknown());
+	return boost::apply_visitor(Visitor::MinSize(m_g, m_name, m_helper), m_filesystem);
 }
 
 Expected<struct statvfs> Unit::getFilesystemStats() const
 {
 	return m_helper.getFilesystemStats(m_name);
 }
+
+template <class T> const T* Unit::getFilesystem() const
+{
+	return boost::get<T>(&m_filesystem);
+}
+
+template const Swap* Unit::getFilesystem() const;
 
 Expected<void> Unit::shrinkFilesystem(quint64 dec) const
 {
@@ -376,37 +341,31 @@ Expected<void> Unit::shrinkFilesystem(quint64 dec) const
 
 	quint64 oldSize = partStats.get().size;
 	if (oldSize < dec)
-		return Expected<void>::fromMessage("Unable to resize m_name below 0");
+	{
+		return Expected<void>::fromMessage(
+				QString("Unable to resize %1 below 0").arg(m_name));
+	}
 	quint64 newSize = oldSize - dec;
 	return resizeFilesystem(newSize);
 }
 
 Expected<void> Unit::resizeFilesystem(quint64 newSize) const
 {
-	Expected<fs_type> fs = getFS();
-	if (!fs.isOk())
-		return fs;
-	return resizeFilesystem(newSize, fs.get());
-}
-
-Expected<void> Unit::resizeFilesystem(quint64 newSize, const fs_type &fs) const
-{
-	Expected<quint64> minSize = getMinSize(fs);
+	Expected<quint64> minSize = getMinSize();
 	if (!minSize.isOk())
 		return minSize;
 	if (minSize.get() > newSize)
+	{
 		return Expected<void>::fromMessage(QString(IDS_ERR_NO_FS_FREE_SPACE)
 							   .arg(newSize).arg(minSize.get()).arg(minSize.get() - newSize));
+	}
 
-	return boost::apply_visitor(Visitor::Resize(m_g, m_name, newSize, m_gfsAction), fs);
+	return boost::apply_visitor(Visitor::Resize(m_g, m_name, newSize, m_gfsAction), m_filesystem);
 }
 
 Expected<bool> Unit::isFilesystemSupported() const
 {
-	Expected<fs_type> fs = getFS();
-	if (!fs.isOk())
-		return fs;
-	return !boost::apply_visitor(Visitor::Same<Unknown>(), fs.get());
+	return getFilesystem<Unknown>() == NULL;
 }
 
 int Unit::getIndex() const
@@ -584,18 +543,40 @@ Expected<QList<Unit> > List::get() const
 Expected<void> List::load() const
 {
 	char **partitions = guestfs_list_partitions(m_g);
-
 	if (!partitions)
 		return Expected<void>::fromMessage(IDS_ERR_CANNOT_GET_PART_LIST);
+
+	Expected<QMap<QString, GuestFS::fs_type> > filesystems = getFilesystems();
+	if (!filesystems.isOk())
+		return filesystems;
 
 	m_partitions = boost::make_shared<QList<Unit> >();
 	for (char **cur = partitions; *cur != NULL; ++cur)
 	{
-		*m_partitions << Unit(m_g, m_helper, m_gfsAction, *cur);
+		*m_partitions << Unit(m_g, m_helper, m_gfsAction, *cur,
+		                      filesystems.get().value(*cur, GuestFS::Unknown()));
 		free(*cur);
 	}
 	free(partitions);
 	return Expected<void>();
+}
+
+Expected<QMap<QString, GuestFS::fs_type> > List::getFilesystems() const
+{
+	char **filesystems = guestfs_list_filesystems(m_g);
+	if (!filesystems)
+		return Expected<fs_type>::fromMessage(IDS_ERR_CANNOT_GET_PART_FS);
+
+	QMap<QString, GuestFS::fs_type> result;
+	for (char **cur = filesystems; *cur != NULL; cur += 2)
+	{
+		result.insert(*cur, parseFilesystem(*(cur + 1)));
+		free(*cur);
+		free(*(cur + 1));
+	}
+
+	free(filesystems);
+	return result;
 }
 
 } // namespace Partition
@@ -783,6 +764,14 @@ Expected<quint64> Xfs::getMinSize() const
 	free(info);
 	return bytes;
 #endif // NEW_GUESTFS
+}
+
+////////////////////////////////////////////////////////////
+// Swap
+
+quint64 Swap::getMinSize()
+{
+	return MIN_SWAP_SIZE;
 }
 
 ////////////////////////////////////////////////////////////
