@@ -191,8 +191,8 @@ Expected<QStringList> Unit::getSnapshots() const
 				.arg(QEMU_IMG).arg(args.join(" ")).arg(ret));
 	}
 
-	//                   | ID  |     TAG        | VMSIZE|   DATE                |
-	QRegExp snapshotRE("^(\\d+)\\s+(.*)\\s+\\d+\\s+\\d{4}-\\d{2}-\\d{2}");
+	//                   | ID  |  TAG  |   VMSIZE    |   DATE                |
+	QRegExp snapshotRE("^(\\d+)\\s+(.*)\\s+\\d+[A-Z]?\\s+\\d{4}-\\d{2}-\\d{2}");
 	QStringList lines = QString(out).split('\n');
 	QStringList snapshots;
 	Q_FOREACH(const QString &line, lines)
