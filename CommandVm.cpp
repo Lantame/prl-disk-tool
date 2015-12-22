@@ -191,9 +191,9 @@ struct VirtResize
 	{
 	}
 
-	VirtResize& expand(const QString &partition)
+	VirtResize& noExpandContent()
 	{
-		m_args << "--expand" << partition;
+		m_args << "--no-expand-content";
 		return *this;
 	}
 
@@ -746,9 +746,8 @@ Expected<void> Consider::Shrink::execute(
 	Expected<Partition::Unit> lastPartition = helper.getLastPartition();
 	if (!lastPartition.isOk())
 		return lastPartition;
-	const Swap* fs = lastPartition.get().getFilesystem<Swap>();
 	VirtResize resize(adapter);
-	if (fs != NULL)
+	if (lastPartition.get().getFilesystem<Swap>() != NULL)
 	{
 		Expected<quint64> newSize = helper.getNewFSSize(sizeMb, lastPartition.get());
 		if (!newSize.isOk())
@@ -756,7 +755,11 @@ Expected<void> Consider::Shrink::execute(
 		resize.resizeForce(lastPartition.get().getName(), newSize.get());
 	}
 	else
+	{
 		resize.shrink(lastPartition.get().getName());
+		if (lastPartition.get().getFilesystem<Ntfs>() != NULL)
+			resize.noExpandContent();
+	}
 	if (!(res = resize(image.getFilename(), tmpPath.get())).isOk())
 		return res;
 	adapter.rename(tmpPath.get(), image.getFilename());

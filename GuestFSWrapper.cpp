@@ -331,6 +331,7 @@ template <class T> const T* Unit::getFilesystem() const
 }
 
 template const Swap* Unit::getFilesystem() const;
+template const Ntfs* Unit::getFilesystem() const;
 
 Expected<void> Unit::shrinkFilesystem(quint64 dec) const
 {
