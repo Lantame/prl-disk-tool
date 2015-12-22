@@ -734,10 +734,14 @@ Expected<void> Consider::Shrink::execute(
 	Expected<QString> snapshot = Image::Unit(image.getFilename()).createSnapshot(adapter);
 	if (!snapshot.isOk())
 		return snapshot;
-	BOOST_SCOPE_EXIT(&image, &snapshot, &adapter)
+	BOOST_SCOPE_EXIT(&image, &snapshot, &adapter, &tmpPath)
 	{
-		Image::Unit(image.getFilename()).applySnapshot(snapshot.get(), adapter);
-		Image::Unit(image.getFilename()).deleteSnapshot(snapshot.get(), adapter);
+		// Only in case of failure.
+		if (QFileInfo(tmpPath.get()).exists())
+		{
+			Image::Unit(image.getFilename()).applySnapshot(snapshot.get(), adapter);
+			Image::Unit(image.getFilename()).deleteSnapshot(snapshot.get(), adapter);
+		}
 	} BOOST_SCOPE_EXIT_END
 
 	Expected<void> res;
