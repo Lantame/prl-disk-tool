@@ -15,7 +15,8 @@ HEADERS += GuestFSWrapper.h \
            Expected.h \
            ProgramOptions.h \
            StringTable.h \
-           Errors.h
+           Errors.h \
+           Lvm.h
 
 SOURCES += main.cpp \
            GuestFSWrapper.cpp \
@@ -27,7 +28,8 @@ SOURCES += main.cpp \
            Util.cpp \
            Abort.cpp \
            ProgramOptions.cpp \
-           StringTable.cpp
+           StringTable.cpp \
+           Lvm.cpp
 
 
 target.path = /usr/sbin/
