@@ -46,6 +46,7 @@ enum {GPT_END_SECTS = 64};
 enum {ALIGNMENT_SECTS = 128};
 enum {MAX_MBR_PRIMARY = 4};
 enum {MIN_SWAP_SIZE = 40 * 1024}; // mkswap asks for 40KiB = 10 pages.
+enum {LVM_METADATA_SIZE = 14336}; // In sectors, taken from previous version.
 
 quint64 ceilTo(quint64 bytes, quint64 div)
 {
@@ -129,8 +130,9 @@ namespace Visitor
 
 struct MinSize: boost::static_visitor<Expected<quint64> >
 {
-	MinSize(guestfs_h *g, const QString &name):
-		m_g(g), m_name(name)
+	MinSize(guestfs_h *g, const QString &name,
+			const boost::optional<Action> &gfsAction):
+		m_g(g), m_name(name), m_gfsAction(gfsAction)
 	{
 	}
 
@@ -140,6 +142,7 @@ struct MinSize: boost::static_visitor<Expected<quint64> >
 private:
 	guestfs_h *m_g;
 	QString m_name;
+	boost::optional<Action> m_gfsAction;
 };
 
 template<> Expected<quint64> MinSize::operator() (const Swap &fs) const
@@ -153,6 +156,11 @@ template<> Expected<quint64> MinSize::operator() (const Unknown &fs) const
 	Q_UNUSED(fs);
 	return Expected<quint64>::fromMessage(
 			QString(IDS_ERR_FS_UNSUPPORTED), ERR_UNSUPPORTED_FS);
+}
+
+template<> Expected<quint64> MinSize::operator() (const Volume::Physical &fs) const
+{
+	return Volume::Physical(fs.getPhysical(), m_g, m_name, m_gfsAction).getMinSize();
 }
 
 template<class T> Expected<quint64> MinSize::operator() (const T &fs) const
@@ -297,7 +305,7 @@ Expected<Stats> Unit::getStats() const
 
 Expected<quint64> Unit::getMinSize() const
 {
-	return boost::apply_visitor(Visitor::MinSize(m_g, m_name), m_filesystem);
+	return boost::apply_visitor(Visitor::MinSize(m_g, m_name, m_gfsAction), m_filesystem);
 }
 
 Expected<struct statvfs> Unit::getFilesystemStats() const
@@ -521,34 +529,69 @@ Expected<QList<Unit> > List::get() const
 	return *m_partitions;
 }
 
+Expected<Unit> List::createUnit(const QString &name) const
+{
+	Expected<QMap<QString, fs_type> > content = getContent();
+	if (!content.isOk())
+		return content;
+	return Unit(m_g, m_gfsAction, name,
+		        content.get().value(name, Unknown()));
+}
+
 Expected<void> List::load() const
 {
 	char **partitions = guestfs_list_partitions(m_g);
 	if (!partitions)
 		return Expected<void>::fromMessage(IDS_ERR_CANNOT_GET_PART_LIST);
 
-	Expected<QMap<QString, GuestFS::fs_type> > filesystems = getFilesystems();
-	if (!filesystems.isOk())
-		return filesystems;
+	Expected<QMap<QString, fs_type> > content = getContent();
+	if (!content.isOk())
+		return content;
 
 	m_partitions = boost::make_shared<QList<Unit> >();
 	for (char **cur = partitions; *cur != NULL; ++cur)
 	{
-		*m_partitions << Unit(m_g, m_helper, m_gfsAction, *cur,
-		                      filesystems.get().value(*cur, GuestFS::Unknown()));
+		*m_partitions << Unit(m_g, m_gfsAction, *cur,
+		                      content.get().value(*cur, Unknown()));
 		free(*cur);
 	}
+
 	free(partitions);
 	return Expected<void>();
 }
 
-Expected<QMap<QString, GuestFS::fs_type> > List::getFilesystems() const
+Expected<QMap<QString, fs_type> > List::getContent() const
+{
+	Expected<QMap<QString, fs_type> > filesystems = getFilesystems();
+	if (!filesystems.isOk())
+		return filesystems;
+	QMap<QString, fs_type> content(filesystems.get());
+
+	// Check LVM
+	Helper helper(m_g);
+	Expected<QStringList> vgs = helper.getVG().get();
+	if (!vgs.isOk())
+		return vgs;
+
+	Q_FOREACH(const QString &vg, vgs.get())
+	{
+		Expected<Lvm::Config> config = helper.getVG().getConfig(vg);
+		if (!config.isOk())
+			return config;
+		QStringList pvs = config.get().getPhysicals();
+		Q_FOREACH(const QString &pv, pvs)
+			content.insert(pv, Volume::Physical(config.get().getPhysical(pv)));
+	}
+	return content;
+}
+
+Expected<QMap<QString, fs_type> > List::getFilesystems() const
 {
 	char **filesystems = guestfs_list_filesystems(m_g);
 	if (!filesystems)
 		return Expected<fs_type>::fromMessage(IDS_ERR_CANNOT_GET_PART_FS);
 
-	QMap<QString, GuestFS::fs_type> result;
+	QMap<QString, fs_type> result;
 	for (char **cur = filesystems; *cur != NULL; cur += 2)
 	{
 		result.insert(*cur, parseFilesystem(*(cur + 1)));
@@ -666,6 +709,166 @@ quint64 Swap::getMinSize()
 	return MIN_SWAP_SIZE;
 }
 
+namespace Volume
+{
+
+////////////////////////////////////////////////////////////
+// Logical
+
+Expected<quint64> Logical::getSize() const
+{
+	return Helper(m_g).getSize64(m_fullName);
+}
+
+Expected<quint64> Logical::getMinSize() const
+{
+	Expected<quint64> size = getSize();
+	if (!size.isOk())
+		return size;
+	Expected<Partition::Unit> lv = Partition::List(
+			m_g, m_gfsAction).createUnit(m_fullName);
+	if (!lv.isOk())
+		return lv;
+	// Cannot resize unsupported fs.
+	quint64 minSize = size.get();
+	Expected<quint64> minSizeRes = lv.get().getMinSize();
+	if (!minSizeRes.isOk())
+	{
+		if (minSizeRes.getCode() != ERR_UNSUPPORTED_FS)
+			return minSizeRes;
+	}
+	else
+		minSize = minSizeRes.get();
+	return minSize;
+}
+
+QString Logical::getName(const Lvm::Group &group, const Lvm::Segment &lastSegment)
+{
+	return QString("/dev/%1/%2").arg(
+			group.getName(),
+			lastSegment.getLogical().getName());
+}
+
+////////////////////////////////////////////////////////////
+// Physical
+
+Expected<quint64> Physical::getMinSize() const
+{
+	const Lvm::Group& group = m_physical.getGroup();
+	if (!group.isResizeable() || !group.isWriteable())
+		return Expected<quint64>::fromMessage("VG is not modifiable");
+
+	Helper helper(m_g);
+	Expected<quint64> sectorSize = helper.getSectorSize();
+	if (!sectorSize.isOk())
+		return sectorSize;
+	quint64 extentSize = group.getExtentSizeInSectors() * sectorSize.get();
+	boost::optional<Lvm::Segment> lastSegment = m_physical.getLastSegment();
+	if (!lastSegment)
+	{
+		// PV is empty. Can resize up to metadata size.
+		return LVM_METADATA_SIZE * sectorSize.get();
+	}
+
+	// Stripped and not-last segments cannot be resized.
+	if (!lastSegment->isResizeable())
+	{
+		return LVM_METADATA_SIZE * sectorSize.get() +
+			   (lastSegment.get().getEndInExtents() + 1) * extentSize;
+	}
+
+	// Get minimum size of content.
+	QString lvName = Logical::getName(group, *lastSegment);
+	Logical logical(m_g, lvName, m_gfsAction);
+	Expected<quint64> lvSize = logical.getSize();
+	if (!lvSize.isOk())
+		return lvSize;
+	Expected<quint64> minSize = logical.getMinSize();
+	if (!minSize.isOk())
+		return minSize;
+
+	// Decrease by last segment size at most.
+	quint64 lvResultSize = qMax(minSize.get(), lvSize.get() -
+			lastSegment->getSizeInExtents() * extentSize);
+	// Roundup to extent size.
+	lvResultSize = (lvResultSize + extentSize - 1) / extentSize * extentSize;
+	// Metadata header.
+	quint64 pvMinSize = LVM_METADATA_SIZE * sectorSize.get();
+	// The end of last segment after resize.
+	pvMinSize += (lastSegment->getEndInExtents() + 1) * extentSize - (lvSize.get() - lvResultSize);
+
+	// Hack: Due to metadata expectations, minimum size may be higher than current.
+	Expected<quint64> pvSize = helper.getSize64(m_partition);
+	if (!pvSize.isOk())
+		return pvSize;
+	return qMin(pvMinSize, (quint64)pvSize.get());
+}
+
+} // namespace Volume
+
+namespace VG
+{
+
+////////////////////////////////////////////////////////////
+// Controller
+
+Expected<QStringList> Controller::get() const
+{
+	int ret;
+	if ((ret = guestfs_vgscan(m_g)))
+		return Expected<QStringList>::fromMessage("Unable to scan VGs", ret);
+	Expected<void> res = activate();
+	if (!res.isOk())
+		return res;
+	char **vgs = guestfs_vgs(m_g);
+	if (vgs == NULL)
+		return Expected<QStringList>::fromMessage("Unable to get VG list", ret);
+
+	QStringList result;
+	for (char **cur = vgs; *cur != NULL; ++cur)
+	{
+		result << *cur;
+		free(*cur);
+	}
+	free(vgs);
+	return result;
+}
+
+Expected<Lvm::Config> Controller::getConfig(const QString &vg) const
+{
+	size_t size;
+	char *ret;
+	if ((ret = guestfs_vgmeta(m_g, QSTR2UTF8(vg), &size)) == NULL)
+	{
+		return Expected<Lvm::Config>::fromMessage(
+				QString("Unable to get metadata for VG '%1'").arg(vg));
+	}
+
+	QString config = QByteArray(ret, size);
+	free(ret);
+	return Lvm::Config::create(config, vg);
+}
+
+Expected<void> Controller::activate() const
+{
+	int ret;
+	Logger::info("vg_activate_all 1");
+	if ((ret = guestfs_vg_activate_all(m_g, 1)))
+		return Expected<void>::fromMessage("Unable to activate VGs");
+	return Expected<void>();
+}
+
+Expected<void> Controller::deactivate() const
+{
+	int ret;
+	Logger::info("vg_activate_all 0");
+	if ((ret = guestfs_vg_activate_all(m_g, 0)))
+		return Expected<void>::fromMessage("Unable to deactivate VGs");
+	return Expected<void>();
+}
+
+} // namespace VG
+
 ////////////////////////////////////////////////////////////
 // Helper
 
@@ -725,6 +928,25 @@ Expected<struct statvfs> Helper::getFilesystemStats(const QString &name) const
 
 	guestfs_free_statvfs(g_stat);
 	return stat;
+}
+
+Expected<quint64> Helper::getSectorSize() const
+{
+	qint64 ret = guestfs_blockdev_getss(m_g, GUESTFS_DEVICE);
+	if (ret < 0)
+		return Expected<quint64>::fromMessage("Unable to get sector size");
+	return ret;
+}
+
+Expected<quint64> Helper::getSize64(const QString &device) const
+{
+	qint64 ret = guestfs_blockdev_getsize64(m_g, QSTR2UTF8(device));
+	if (ret < 0)
+	{
+		return Expected<quint64>::fromMessage(
+				QString("Unable to get size of %1").arg(device));
+	}
+	return ret;
 }
 
 ////////////////////////////////////////////////////////////
@@ -895,7 +1117,7 @@ Expected<void> Wrapper::createLogical(const Wrapper::partMap_type &logical) cons
 			return Expected<void>::fromMessage("Unable to create partition", ret);
 
 		Expected<void> res;
-		Partition::Unit part(m_g.get(), m_helper, m_gfsAction,
+		Partition::Unit part(m_g.get(), m_gfsAction,
 		                     QString("%1%2").arg(GUESTFS_DEVICE).arg(it.key()));
 		if (!(res = part.apply(curAttrs)).isOk())
 			return res;
@@ -958,14 +1180,6 @@ Expected<void> Wrapper::resizePartition(
 	}
 
 	return Expected<void>();
-}
-
-Expected<quint64> Wrapper::getSectorSize() const
-{
-	qint64 ret = guestfs_blockdev_getss(m_g.get(), GUESTFS_DEVICE);
-	if (ret < 0)
-		return Expected<quint64>::fromMessage("Unable to get sector size");
-	return ret;
 }
 
 ////////////////////////////////////////////////////////////
