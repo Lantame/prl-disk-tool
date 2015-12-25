@@ -219,6 +219,11 @@ struct Unknown
 {
 };
 
+namespace Partition
+{
+struct Unit;
+}
+
 namespace Volume
 {
 
@@ -237,6 +242,9 @@ struct Logical
 
 	Expected<quint64> getSize() const;
 	Expected<quint64> getMinSize() const;
+
+	Expected<Partition::Unit> createUnit() const;
+	Expected<void> resize(quint64 newSize) const;
 
 private:
 	guestfs_h *m_g;
@@ -267,8 +275,19 @@ struct Physical
 	}
 
 	Expected<quint64> getMinSize() const;
+	Expected<void> resize(quint64 newSize) const;
+
+	template <class T>
+	Expected<qint64> getLVDelta(quint64 newSize, const Lvm::Segment &segment,
+								const T& mode) const;
+	Expected<void> pvresize(quint64 newSize) const;
 
 private:
+	Expected<quint64> getSize() const;
+
+	Expected<qint64> calculateLVDelta(
+			quint64 newSize, const Lvm::Segment &segment) const;
+
 	Lvm::Physical m_physical;
 	guestfs_h *m_g;
 	QString m_partition;
@@ -405,7 +424,10 @@ struct Unit
 
 	Expected<quint64> getMinSize() const;
 
-	template <class T> const T* getFilesystem() const;
+	template <class T> const T* getFilesystem() const
+	{
+		return boost::get<T>(&m_filesystem);
+	}
 
 	const GuestFS::fs_type& getFilesystem() const
 	{
@@ -413,10 +435,10 @@ struct Unit
 	}
 
 	/* Disk-modifying */
-	Expected<void> shrinkFilesystem(quint64 dec) const;
+	Expected<void> shrinkContent(quint64 dec) const;
 
 	/* Disk-modifying */
-	Expected<void> resizeFilesystem(quint64 newSize) const;
+	Expected<void> resizeContent(quint64 newSize) const;
 
 	Expected<bool> isFilesystemSupported() const;
 
@@ -532,6 +554,18 @@ struct Wrapper
 	{
 		return m_helper.getSectorSize();
 	}
+
+	Expected<void> activateVGs() const
+	{
+		return m_helper.getVG().activate();
+	}
+
+	Expected<void> deactivateVGs() const
+	{
+		return m_helper.getVG().deactivate();
+	}
+
+	Expected<void> sync() const;
 
 private:
 	struct HandleDestroyer

@@ -352,7 +352,7 @@ Expected<void> ResizeHelper::shrinkFSIfNeeded(quint64 mb)
 	{
 		// Shrinking empty space is not enough.
 		// We have to resize filesystem ourselves.
-		return lastPartition.get().shrinkFilesystem(-fsDelta.get());
+		return lastPartition.get().shrinkContent(-fsDelta.get());
 	}
 	return Expected<void>();
 }
@@ -395,6 +395,12 @@ Expected<void> ResizeHelper::expandToFit(quint64 mb, const Wrapper &gfs)
 	if (!lastPartition.isOk())
 		return lastPartition;
 
+	if (lastPartition.get().getFilesystem<Volume::Physical>() != NULL)
+	{
+		if (!(res = gfs.deactivateVGs()).isOk())
+			return res;
+	}
+
 	Expected<bool> logical = lastPartition.get().isLogical();
 	if (!logical.isOk())
 		return logical;
@@ -417,7 +423,13 @@ Expected<void> ResizeHelper::expandToFit(quint64 mb, const Wrapper &gfs)
 				      partTable.get(), gfs)).isOk())
 		return stats;
 
-	if (!(res = lastPartition.get().resizeFilesystem(stats.get().size)).isOk())
+	if (lastPartition.get().getFilesystem<Volume::Physical>() != NULL)
+	{
+		if (!(res = gfs.activateVGs()).isOk())
+			return res;
+	}
+
+	if (!(res = lastPartition.get().resizeContent(stats.get().size)).isOk())
 		return res;
 
 	return Expected<void>();
@@ -562,7 +574,7 @@ template<> Expected<void> ResizeHelper::resizeContent(
 template <class T> Expected<void> ResizeHelper::resizeContent(
 		const T& partition, qint64 delta)
 {
-	return partition.unit.shrinkFilesystem(-delta);
+	return partition.unit.shrinkContent(-delta);
 }
 
 template <class T>
@@ -857,6 +869,12 @@ Expected<void> Consider::Shrink::execute(ResizeHelper& helper, quint64 sizeMb) c
 	Expected<void> res;
 	if (!(res = helper.shrinkContent(sizeMb, resize)).isOk())
 		return res;
+	// We are going to execute virt-resize while handle is opered.
+	Expected<Wrapper> gfs = helper.getGFSWritable();
+	if (!gfs.isOk())
+		return gfs;
+	if (!(res = gfs.get().sync()).isOk())
+		return res;
 	if (!(res = resize(image.getFilename(), tmpPath.get())).isOk())
 		return res;
 	adapter.rename(tmpPath.get(), image.getFilename());
@@ -890,7 +908,7 @@ Expected<void> Consider::Expand::execute(ResizeHelper& helper, quint64 sizeMb) c
 		return tmpPath;
 	BOOST_SCOPE_EXIT(&tmpPath)
 	{
-		QFile::remove(tmpPath.get());
+		CallAdapter(Call()).remove(tmpPath.get());
 	} BOOST_SCOPE_EXIT_END
 
 	Expected<void> res;

@@ -224,9 +224,16 @@ Expected<QString> Unit::createSnapshot(const CallAdapter &adapter) const
 		return Expected<QString>::fromMessage(QString(IDS_ERR_SUBPROGRAM_RETURN_CODE)
 										      .arg(QEMU_IMG).arg(args.join(" ")).arg(ret));
 	}
+	if (!adapter.hasCall())
+	{
+		// Dummy.
+		return QString("1");
+	}
 	Expected<QStringList> snapshots = getSnapshots();
 	if (!snapshots.isOk())
 		return snapshots;
+	if (snapshots.get().isEmpty())
+		return Expected<QString>::fromMessage("Snapshot not found");
 	return snapshots.get().last();
 }
 

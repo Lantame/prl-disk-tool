@@ -168,6 +168,11 @@ struct CallAdapter
 		return ::execvp(name, args);
 	}
 
+	bool hasCall() const
+	{
+		return m_call;
+	}
+
 private:
 	boost::optional<Call> m_call;
 };
