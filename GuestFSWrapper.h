@@ -200,8 +200,6 @@ struct Action
 	}
 };
 
-} // namespace GuestFS
-
 namespace Partition
 {
 
@@ -322,6 +320,12 @@ struct Unit
 	Expected<quint64> getMinSize() const;
 
 	template <class T> const T* getFilesystem() const;
+
+	const GuestFS::fs_type& getFilesystem() const
+	{
+		return m_filesystem;
+	}
+
 	/* Disk-modifying */
 	Expected<void> shrinkFilesystem(quint64 dec) const;
 
@@ -331,14 +335,6 @@ struct Unit
 	Expected<bool> isFilesystemSupported() const;
 
 	Expected<struct statvfs> getFilesystemStats() const;
-
-	/* Disk-modifying.
-	 * Remove partition and create it with given start and end sectors.
-	 * NB: In case of not-last partition, the partition naming may change.
-	 * Preserves attributes (bootable, gpt type, mbrId, gpt name).
-	 */
-	Expected<void> resizePartition(
-			const QString &partition, quint64 startSector, quint64 endSector) const;
 
 	Expected<Attribute::Aggregate> getAttributes() const;
 
@@ -386,9 +382,6 @@ private:
 };
 
 } // namespace Partition
-
-namespace GuestFS
-{
 
 ////////////////////////////////////////////////////////////
 // Wrapper

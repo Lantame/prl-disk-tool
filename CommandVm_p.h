@@ -94,15 +94,22 @@ struct ResizeHelper
 	{
 	}
 
-	Expected<Partition::Unit> getLastPartition();
+	Expected<GuestFS::Partition::Unit> getLastPartition();
 	Expected<ResizeData> getResizeData();
 	Expected<QString> createTmpImage(quint64 mb, const QString &backingFile = QString()) const;
 	Expected<void> shrinkFSIfNeeded(quint64 mb);
-	Expected<quint64> getNewFSSize(quint64 mb, const Partition::Unit &lastPartition);
+	Expected<quint64> getNewFSSize(quint64 mb, const GuestFS::Partition::Unit &lastPartition);
 	Expected<void> expandToFit(quint64 mb, const GuestFS::Wrapper &gfs);
 	Expected<void> mergeIntoPrevious(const QString &path);
 	Expected<GuestFS::Wrapper> getGFSWritable(const QString &path = QString());
 	Expected<GuestFS::Wrapper> getGFSReadonly();
+
+	template <class T>
+	Expected<void> resizeContent(const T &partition, qint64 delta);
+
+	template <class T>
+	Expected<void> shrinkContent(const T &partition, quint64 mb, VirtResize &resize);
+	Expected<void> shrinkContent(quint64 mb, VirtResize &resize);
 
 
 	const boost::optional<Call>& getCall() const
@@ -115,13 +122,13 @@ struct ResizeHelper
 	}
 
 private:
-	Expected<Partition::Stats> expandPartition(
-	        const Partition::Unit &partition, quint64 mb,
+	Expected<GuestFS::Partition::Stats> expandPartition(
+	        const GuestFS::Partition::Unit &partition, quint64 mb,
 	        const QString &partTable, const GuestFS::Wrapper &gfs);
-	Expected<Partition::Stats> calculateNewPartition(
-			quint64 mb, const Partition::Stats &stats,
+	Expected<GuestFS::Partition::Stats> calculateNewPartition(
+			quint64 mb, const GuestFS::Partition::Stats &stats,
 			quint64 sectorSize, const QString &partTable);
-	Expected<qint64> calculateFSDelta(quint64 mb, const Partition::Unit &lastPartition);
+	Expected<qint64> calculateFSDelta(quint64 mb, const GuestFS::Partition::Unit &lastPartition);
 
 private:
 	const Image::Info &m_image;
@@ -132,6 +139,56 @@ private:
 
 namespace Resizer
 {
+namespace Partition
+{
+
+////////////////////////////////////////////////////////////
+// Logical
+
+struct Logical
+{
+	explicit Logical(const GuestFS::Partition::Unit &unit):
+		unit(unit)
+	{
+	}
+
+	GuestFS::Partition::Unit unit;
+};
+
+////////////////////////////////////////////////////////////
+// Extended
+
+struct Extended
+{
+	Extended(const GuestFS::Partition::Unit &unit,
+			 const GuestFS::Partition::Unit &lastChild):
+		unit(unit), lastChild(lastChild)
+	{
+	}
+
+	void fillVirtResize(quint64 newSize, VirtResize &resize) const;
+
+	GuestFS::Partition::Unit unit;
+	GuestFS::Partition::Unit lastChild;
+};
+
+////////////////////////////////////////////////////////////
+// Primary
+
+struct Primary
+{
+	explicit Primary(const GuestFS::Partition::Unit &unit):
+		unit(unit)
+	{
+	}
+
+	void fillVirtResize(quint64 newSize, VirtResize &resize) const;
+
+	GuestFS::Partition::Unit unit;
+};
+
+} // namespace Partition
+
 namespace Ignore
 {
 

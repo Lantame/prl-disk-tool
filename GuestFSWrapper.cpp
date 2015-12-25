@@ -34,8 +34,6 @@
 #include "StringTable.h"
 #include "Errors.h"
 
-using namespace GuestFS;
-
 namespace
 {
 
@@ -105,19 +103,22 @@ int getPartIndex(const QString &partition)
 GuestFS::fs_type parseFilesystem(const QString &fs)
 {
 	if (fs == "ext2" || fs == "ext3" || fs == "ext4")
-		return fs_type(Ext());
+		return GuestFS::fs_type(GuestFS::Ext());
 	else if (fs == "ntfs")
-		return fs_type(Ntfs());
+		return GuestFS::fs_type(GuestFS::Ntfs());
 	else if (fs == "btrfs")
-		return fs_type(Btrfs());
+		return GuestFS::fs_type(GuestFS::Btrfs());
 	else if (fs == "xfs")
-		return fs_type(Xfs());
+		return GuestFS::fs_type(GuestFS::Xfs());
 	else if (fs == "swap")
-		return fs_type(Swap());
-	return fs_type(Unknown());
+		return GuestFS::fs_type(GuestFS::Swap());
+	return GuestFS::fs_type(GuestFS::Unknown());
 }
 
 } // namespace
+
+namespace GuestFS
+{
 
 namespace Visitor
 {
@@ -620,11 +621,14 @@ Expected<quint64> Ext::getMinSize(const struct statvfs &stats) const
 
 int Ntfs::resize(quint64 newSize) const
 {
-	return guestfs_ntfsresize_opts(
+	int ret = guestfs_ntfsresize_opts(
 			m_g, QSTR2UTF8(m_partition),
 			GUESTFS_NTFSRESIZE_OPTS_SIZE, newSize,
 			GUESTFS_NTFSRESIZE_OPTS_FORCE, 1,
 			-1);
+	if (ret)
+		return ret;
+	return guestfs_ntfsfix(m_g, QSTR2UTF8(m_partition), -1);
 }
 
 Expected<quint64> Ntfs::getMinSize() const
@@ -1149,3 +1153,5 @@ Expected<Wrapper> Map::getReadonly(const QString &path)
 
 	return it.value();
 }
+
+} // namespace GuestFS
