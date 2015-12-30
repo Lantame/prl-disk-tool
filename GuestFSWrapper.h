@@ -70,6 +70,8 @@ struct Controller
 	Expected<void> activate() const;
 	Expected<void> deactivate() const;
 
+	Expected<quint64> getTotalFree() const;
+
 private:
 	guestfs_h *m_g;
 };
@@ -423,6 +425,7 @@ struct Unit
 	Expected<Partition::Stats> getStats() const;
 
 	Expected<quint64> getMinSize() const;
+	Expected<quint64> getSize() const;
 
 	template <class T> const T* getFilesystem() const
 	{
@@ -467,6 +470,8 @@ private:
 
 struct List
 {
+	typedef QMap<QString, fs_type> fsMap_type;
+
 	List(guestfs_h *g, const boost::optional<Action> &gfsAction):
 		m_g(g), m_gfsAction(gfsAction)
 	{
@@ -479,10 +484,11 @@ struct List
 
 	Expected<Unit> createUnit(const QString &name) const;
 
+	Expected<fsMap_type> getFilesystems() const;
+
 private:
 	Expected<void> load() const;
-	Expected<QMap<QString, fs_type> > getFilesystems() const;
-	Expected<QMap<QString, fs_type> > getContent() const;
+	Expected<fsMap_type> getContent() const;
 
 	guestfs_h *m_g;
 	boost::optional<Action> m_gfsAction;
@@ -531,6 +537,11 @@ struct Wrapper
 		return m_partList.get();
 	}
 
+	const Partition::List& getPartitionList() const
+	{
+		return m_partList;
+	}
+
 	Expected<quint64> getBlockSize() const;
 
 	/* 'msdos' or 'gpt' */
@@ -563,6 +574,11 @@ struct Wrapper
 	Expected<void> deactivateVGs() const
 	{
 		return m_helper.getVG().deactivate();
+	}
+
+	Expected<quint64> getVGTotalFree() const
+	{
+		return m_helper.getVG().getTotalFree();
 	}
 
 	Expected<void> sync() const;

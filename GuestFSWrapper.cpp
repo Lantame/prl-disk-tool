@@ -429,6 +429,11 @@ Expected<quint64> Unit::getMinSize() const
 	return boost::apply_visitor(Visitor::MinSize(m_g, m_name, m_gfsAction), m_filesystem);
 }
 
+Expected<quint64> Unit::getSize() const
+{
+	return m_helper.getSize64(m_name);
+}
+
 Expected<struct statvfs> Unit::getFilesystemStats() const
 {
 	return m_helper.getFilesystemStats(m_name);
@@ -644,7 +649,7 @@ Expected<QList<Unit> > List::get() const
 
 Expected<Unit> List::createUnit(const QString &name) const
 {
-	Expected<QMap<QString, fs_type> > content = getContent();
+	Expected<fsMap_type> content = getContent();
 	if (!content.isOk())
 		return content;
 	return Unit(m_g, m_gfsAction, name,
@@ -657,7 +662,7 @@ Expected<void> List::load() const
 	if (!partitions)
 		return Expected<void>::fromMessage(IDS_ERR_CANNOT_GET_PART_LIST);
 
-	Expected<QMap<QString, fs_type> > content = getContent();
+	Expected<fsMap_type> content = getContent();
 	if (!content.isOk())
 		return content;
 
@@ -673,12 +678,12 @@ Expected<void> List::load() const
 	return Expected<void>();
 }
 
-Expected<QMap<QString, fs_type> > List::getContent() const
+Expected<List::fsMap_type> List::getContent() const
 {
-	Expected<QMap<QString, fs_type> > filesystems = getFilesystems();
+	Expected<fsMap_type> filesystems = getFilesystems();
 	if (!filesystems.isOk())
 		return filesystems;
-	QMap<QString, fs_type> content(filesystems.get());
+	fsMap_type content(filesystems.get());
 
 	// Check LVM
 	Helper helper(m_g);
@@ -698,13 +703,13 @@ Expected<QMap<QString, fs_type> > List::getContent() const
 	return content;
 }
 
-Expected<QMap<QString, fs_type> > List::getFilesystems() const
+Expected<List::fsMap_type> List::getFilesystems() const
 {
 	char **filesystems = guestfs_list_filesystems(m_g);
 	if (!filesystems)
 		return Expected<fs_type>::fromMessage(IDS_ERR_CANNOT_GET_PART_FS);
 
-	QMap<QString, fs_type> result;
+	fsMap_type result;
 	for (char **cur = filesystems; *cur != NULL; cur += 2)
 	{
 		result.insert(*cur, parseFilesystem(*(cur + 1)));
@@ -1129,6 +1134,20 @@ Expected<void> Controller::deactivate() const
 	if ((ret = guestfs_vg_activate_all(m_g, 0)))
 		return Expected<void>::fromMessage("Unable to deactivate VGs");
 	return Expected<void>();
+}
+
+Expected<quint64> Controller::getTotalFree() const
+{
+	struct guestfs_lvm_vg_list *vgs = guestfs_vgs_full(m_g);
+	if (vgs == NULL)
+		return Expected<quint64>::fromMessage("Unable to get VG stats");
+
+	quint64 free = 0;
+	for (uint32_t i = 0; i < vgs->len; ++i)
+		free += vgs->val[i].vg_free;
+
+	guestfs_free_lvm_vg_list(vgs);
+	return free;
 }
 
 } // namespace VG
