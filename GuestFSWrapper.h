@@ -493,7 +493,8 @@ private:
 	guestfs_h *m_g;
 	boost::optional<Action> m_gfsAction;
 	// Lazy-initialized cache.
-	mutable boost::shared_ptr<QList<Unit> > m_partitions;
+	mutable boost::optional<QList<Unit> > m_partitions;
+	mutable boost::optional<fsMap_type> m_content;
 };
 
 } // namespace Partition
@@ -518,7 +519,7 @@ struct Wrapper
 
 	Expected<Partition::Unit> getLastPartition() const
 	{
-		return m_partList.getLast();
+		return m_partList->getLast();
 	}
 
 	/* Return extended partition (at most 1 possible).
@@ -534,12 +535,12 @@ struct Wrapper
 
 	Expected<QList<Partition::Unit> > getPartitions() const
 	{
-		return m_partList.get();
+		return m_partList->get();
 	}
 
 	const Partition::List& getPartitionList() const
 	{
-		return m_partList;
+		return *m_partList;
 	}
 
 	Expected<quint64> getBlockSize() const;
@@ -600,7 +601,7 @@ private:
 			const boost::optional<Action> &gfsAction,
 			bool readOnly):
 		m_g(g), m_gfsAction(gfsAction), m_helper(g.get()),
-		m_partList(g.get(), m_gfsAction), m_readOnly(readOnly)
+		m_partList(new Partition::List(g.get(), m_gfsAction)), m_readOnly(readOnly)
 	{
 	}
 
@@ -611,7 +612,7 @@ private:
 	boost::shared_ptr<guestfs_h> m_g;
 	boost::optional<Action> m_gfsAction;
 	Helper m_helper;
-	Partition::List m_partList;
+	boost::shared_ptr<Partition::List> m_partList;
 	bool m_readOnly;
 };
 

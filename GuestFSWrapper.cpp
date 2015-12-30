@@ -666,20 +666,24 @@ Expected<void> List::load() const
 	if (!content.isOk())
 		return content;
 
-	m_partitions = boost::make_shared<QList<Unit> >();
+	QList<Unit> partList;
 	for (char **cur = partitions; *cur != NULL; ++cur)
 	{
-		*m_partitions << Unit(m_g, m_gfsAction, *cur,
-		                      content.get().value(*cur, Unknown()));
+		partList << Unit(m_g, m_gfsAction, *cur,
+		                 content.get().value(*cur, Unknown()));
 		free(*cur);
 	}
 
 	free(partitions);
+	m_partitions = partList;
 	return Expected<void>();
 }
 
 Expected<List::fsMap_type> List::getContent() const
 {
+	if (m_content)
+		return *m_content;
+
 	Expected<fsMap_type> filesystems = getFilesystems();
 	if (!filesystems.isOk())
 		return filesystems;
@@ -700,7 +704,8 @@ Expected<List::fsMap_type> List::getContent() const
 		Q_FOREACH(const QString &pv, pvs)
 			content.insert(pv, Volume::Physical(config.get().getPhysical(pv)));
 	}
-	return content;
+	m_content = content;
+	return *m_content;
 }
 
 Expected<List::fsMap_type> List::getFilesystems() const
@@ -1265,7 +1270,7 @@ Wrapper::createReadOnly(const QString& filename, const boost::optional<Action> &
 
 Expected<Partition::Unit> Wrapper::getContainer() const
 {
-	Expected<QList<Partition::Unit> > parts = m_partList.get();
+	Expected<QList<Partition::Unit> > parts = m_partList->get();
 	if (!parts.isOk())
 		return parts;
 	QList<Partition::Unit> partitions = parts.get();
@@ -1304,7 +1309,7 @@ Expected<Partition::Unit> Wrapper::getContainer() const
 
 Expected<quint64> Wrapper::getVirtResizeOverhead() const
 {
-	Expected<Partition::Unit> firstPart = m_partList.getFirst();
+	Expected<Partition::Unit> firstPart = m_partList->getFirst();
 	if (!firstPart.isOk())
 		return firstPart;
 	Expected<Partition::Stats> firstPartStats = firstPart.get().getStats();
@@ -1316,7 +1321,7 @@ Expected<quint64> Wrapper::getVirtResizeOverhead() const
 		return sectorSize;
 	quint64 startOverheadSects = qMax(firstPartStart / sectorSize.get(),
 									  (quint64) qMax((unsigned)MAX_BOOTLOADER_SECTS, (unsigned)GPT_START_SECTS));
-	Expected<int> partCount = m_partList.getCount();
+	Expected<int> partCount = m_partList->getCount();
 	if (!partCount.isOk())
 		return partCount;
 	quint64 alignmentSects = (partCount.get() + 1) * ALIGNMENT_SECTS;
@@ -1347,7 +1352,7 @@ Expected<void> Wrapper::expandGPT() const
 
 Expected<Wrapper::partMap_type> Wrapper::getLogical() const
 {
-	Expected<QList<Partition::Unit> > parts = m_partList.get();
+	Expected<QList<Partition::Unit> > parts = m_partList->get();
 	if (!parts.isOk())
 		return parts;
 	QList<Partition::Unit> partitions = parts.get();
