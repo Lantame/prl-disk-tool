@@ -204,9 +204,6 @@ template<> const bool Traits<CompactInfo>::m_info = true;
 template<> const char Traits<MergeSnapshots>::m_action[] = "merge";
 template<> const bool Traits<MergeSnapshots>::m_info = false;
 
-template<> const char Traits<Convert>::m_action[] = "convert";
-template<> const bool Traits<Convert>::m_info = false;
-
 template<> po::options_description Traits<Resize>::getOptions()
 {
 	po::options_description options("Disk resizing (\"resize\")");
@@ -253,17 +250,6 @@ template<> po::options_description Traits<MergeSnapshots>::getOptions()
 	po::options_description options("Disk snapshots merge (\"merge\")");
 	options.add_options()
 		("external", "Merge external snapshots (default: internal)")
-		("hdd", po::value<std::string>(), "Full path to the disk")
-		;
-	return options;
-}
-
-template<> po::options_description Traits<Convert>::getOptions()
-{
-	po::options_description options("Disk conversion (\"convert\")");
-	options.add_options()
-		("expanding", "Convert disk to expanding (increasing capacity)")
-		("plain", "Convert disk to plain (fixed capacity)")
 		("hdd", po::value<std::string>(), "Full path to the disk")
 		;
 	return options;
@@ -389,26 +375,6 @@ Expected<MergeSnapshots> Factory<MergeSnapshots>::operator()() const
 	}
 }
 
-template<>
-Expected<Convert> Factory<Convert>::operator()() const
-{
-	Expected<DiskAware> disk = Factory<DiskAware>::build(m_vm);
-	if (!disk.isOk())
-		return disk;
-
-	bool plain = m_vm.count(OPT_MAKE_PLAIN),
-		 expanding = m_vm.count(OPT_MAKE_EXPANDING);
-	if (!(plain ^ expanding))
-	{
-		return Expected<Convert>::fromMessage(
-				"Either --plain or --expanding must be specified");
-	}
-	else if (plain)
-		return Convert(disk.get(), Preallocation::Plain(disk.get(), m_call), m_call);
-	else
-		return Convert(disk.get(), Preallocation::Expanding(disk.get(), m_call), m_call);
-}
-
 } // namespace Command
 
 ////////////////////////////////////////////////////////////
@@ -482,7 +448,6 @@ template Expected<void> Visitor::createAndExecute<ResizeInfo>() const;
 template Expected<void> Visitor::createAndExecute<Compact>() const;
 template Expected<void> Visitor::createAndExecute<CompactInfo>() const;
 template Expected<void> Visitor::createAndExecute<MergeSnapshots>() const;
-template Expected<void> Visitor::createAndExecute<Convert>() const;
 
 ////////////////////////////////////////////////////////////
 // UsageVisitor

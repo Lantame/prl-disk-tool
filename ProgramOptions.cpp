@@ -57,10 +57,6 @@ extern const char OPT_UNITS[] = "units";
 extern const char OPT_HUMAN_READABLE[] = "";
 extern const char OPT_EXTERNAL[] = "external";
 
-// disk options
-extern const char OPT_MAKE_EXPANDING[] = "expanding";
-extern const char OPT_MAKE_PLAIN[] = "plain";
-
 
 OptionParser::OptionParser()
 {
