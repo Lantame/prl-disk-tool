@@ -48,8 +48,7 @@ typedef boost::mpl::vector<
 	Command::Traits<Command::ResizeInfo>,
 	Command::Traits<Command::Compact>,
 	Command::Traits<Command::CompactInfo>,
-	Command::Traits<Command::MergeSnapshots>,
-	Command::Traits<Command::Convert>
+	Command::Traits<Command::MergeSnapshots>
 		> desc_type;
 
 void printUsage(const OptionParser &parser)

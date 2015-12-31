@@ -60,9 +60,6 @@ extern const char OPT_UNITS[];
 extern const char OPT_HUMAN_READABLE[];
 extern const char OPT_EXTERNAL[];
 
-// disk options
-extern const char OPT_MAKE_EXPANDING[];
-extern const char OPT_MAKE_PLAIN[];
 
 ////////////////////////////////////////////////////////////
 // ParsedCommand

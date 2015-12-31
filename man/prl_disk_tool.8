@@ -16,8 +16,6 @@ prl_disk_tool \fBcompact\fP \fB\-i,\-\-info\fP \-\-hdd <\fIdisk_name\fP> [\fB\-\
 .PP
 prl_disk_tool \fBmerge\fP \-\-hdd <\fIdisk_name\fP> [\fB\-\-external\fP]
 .PP
-prl_disk_tool \fBconvert\fP \-\-hdd <\fIdisk_name\fP> <\fB\-\-expanding|\-\-plain\fP>
-.PP
 prl_disk_tool \fB\-\-help\fP
 
 .SH DESCRIPTION
@@ -33,8 +31,6 @@ Compacting is performed by scanning file systems for unused clusters,
 zeroing and discarding corresponding disk blocks. The supported file systems are NTFS, ext2/ext3/ext4, btrfs, xfs.
 .IP \fBmerge\fP 4
 Merges all snapshots of the virtual hard disk. By default, merges internal snapshots. Use \fB\-\-external\fP to merge external snapshots.
-.IP \fBconvert\fP 4
-Converts the virtual hard disk into another format (plain or expanding).
 .BR
 
 .SH OPTIONS
@@ -110,13 +106,6 @@ Show the estimated disk size after the compaction without compacting the disk. T
 \fB\-\-external\fP
 Merge \fBexternal\fP snapshots instead of \fBinternal\fP (by default).
 
-.SS Conversion
-.TP
-\fB\-\-expanding\fP
-reduce the size of a plain disk to the actual amount of data stored on it and make it expandable allowing it to grow in size as the amount of data grows.
-.TP
-\fB\-\-plain\fP
-convert an expandable disk to a disk of fixed capacity that cannot grow in size.
 .SS Other:
 .TP
 \fB\-\-help\fP [\fB\-\-usage\fP]

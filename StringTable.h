@@ -41,7 +41,6 @@ extern char IDS_ERR_SUBPROGRAM_RETURN_CODE[];
 extern char IDS_ERR_INVALID_ARGS[];
 extern char IDS_ERR_INVALID_HDD[];
 extern char IDS_ERR_HDD_NOT_EXISTS[];
-extern char IDS_ERR_CANNOT_CONVERT_NEED_MERGE[];
 extern char IDS_ERR_HAS_INTERNAL_SNAPSHOTS[];
 extern char IDS_ERR_PLOOP_EXEC_FAILED[];
 extern char IDS_ERR_NO_FS_FREE_SPACE[];
