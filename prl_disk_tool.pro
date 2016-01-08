@@ -11,6 +11,7 @@ HEADERS += GuestFSWrapper.h \
            Command.h \
            ImageInfo.h \
            Util.h \
+           Abort.h \
            Expected.h \
            ProgramOptions.h \
            StringTable.h \
@@ -24,6 +25,7 @@ SOURCES += main.cpp \
            CommandCt.cpp \
            ImageInfo.cpp \
            Util.cpp \
+           Abort.cpp \
            ProgramOptions.cpp \
            StringTable.cpp
 
