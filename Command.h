@@ -40,6 +40,7 @@
 #include "Expected.h"
 #include "GuestFSWrapper.h"
 #include "ImageInfo.h"
+#include "Abort.h"
 
 namespace Command
 {
@@ -418,6 +419,7 @@ private:
 
 	boost::optional<Call> m_call;
 	boost::optional<GuestFS::Action> m_gfsAction;
+	Abort::token_type m_token;
 };
 
 ////////////////////////////////////////////////////////////

@@ -417,16 +417,17 @@ Expected<Convert> Factory<Convert>::operator()() const
 Visitor::Visitor(const ParsedCommand &cmd,
 				 const po::variables_map &vm,
 				 const std::vector<std::string> &args):
-	m_action(QString::fromStdString(cmd.getAction())), m_args(args)
+	m_action(QString::fromStdString(cmd.getAction())), m_args(args),
+	m_token(new Abort::Token())
 {
 	m_info = vm.count(OPT_INFO);
 	// These options are not passed to commands.
 	if (vm.count(OPT_NO_ACTION) == 0)
 	{
-		m_call = Call();
+		m_call = Call(m_token);
 		m_gfsAction = Action();
 	}
-	m_gfsMap = GuestFS::Map(m_gfsAction);
+	m_gfsMap = GuestFS::Map(m_gfsAction, m_token);
 	m_result = Expected<void>::fromMessage(QString("Unknown action: %1 %2").arg(
 					m_action, m_info ? "--info" : ""));
 }
@@ -475,6 +476,10 @@ Expected<void> Visitor::createAndExecute() const
 	const T& cmd  = cmdRes.get();
 	if (isPloop(cmd.getDiskPath()))
 		return cmd.executePloop();
+
+	Abort::Signal s;
+	s.set(m_token);
+	s.start();
 	return cmd.execute();
 }
 

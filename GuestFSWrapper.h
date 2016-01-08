@@ -46,6 +46,7 @@
 
 #include "Util.h"
 #include "Expected.h"
+#include "Abort.h"
 
 namespace GuestFS
 {
@@ -486,8 +487,9 @@ private:
 
 struct Map
 {
-	Map(const boost::optional<Action> action = boost::optional<Action>()):
-		m_gfsAction(action)
+	Map(const boost::optional<Action> action = boost::optional<Action>(),
+		const Abort::token_type& token = Abort::token_type()):
+		m_token(token), m_gfsAction(action)
 	{
 	}
 
@@ -497,6 +499,7 @@ struct Map
 
 private:
 	QMap<QString, GuestFS::Wrapper> m_gfsMap;
+	Abort::token_type m_token;
 	boost::optional<Action> m_gfsAction;
 };
 

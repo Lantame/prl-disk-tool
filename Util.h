@@ -32,6 +32,8 @@
 #ifndef UTIL_H
 #define UTIL_H
 
+#include "Abort.h"
+
 #include <QStringList>
 #include <QByteArray>
 #include <QFile>
@@ -98,6 +100,14 @@ private:
 
 struct Call
 {
+	Call()
+	{
+	}
+
+	Call(const Abort::token_type &token): m_token(token)
+	{
+	}
+
 	bool rename(const QString &oldName, const QString &newName) const
 	{
 		if (QFile::exists(newName))
@@ -114,6 +124,9 @@ struct Call
 	{
 		return run_prg(name, lstArgs, out, err);
 	}
+
+private:
+	Abort::token_type m_token;
 };
 
 ////////////////////////////////////////////////////////////
