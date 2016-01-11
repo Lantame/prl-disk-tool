@@ -1094,6 +1094,9 @@ Expected<quint64> Wrapper::getSectorSize() const
 
 Expected<Wrapper> Map::getWritable(const QString &path)
 {
+	if (m_token && m_token->isCancellationRequested())
+		return Expected<void>::fromMessage("Operation was cancelled");
+
 	QMap<QString, Wrapper>::iterator it = m_gfsMap.find(path);
 
 	if (it != m_gfsMap.end() && it.value().isReadOnly())
@@ -1109,6 +1112,10 @@ Expected<Wrapper> Map::getWritable(const QString &path)
 		Expected<Wrapper> gfs = Wrapper::create(path, m_gfsAction);
 		if (!gfs.isOk())
 			return gfs;
+
+		if (m_token && m_token->isCancellationRequested())
+			return Expected<void>::fromMessage("Operation was cancelled");
+
 		it = m_gfsMap.insert(path, gfs.get());
 	}
 
@@ -1117,6 +1124,9 @@ Expected<Wrapper> Map::getWritable(const QString &path)
 
 Expected<Wrapper> Map::getReadonly(const QString &path)
 {
+	if (m_token && m_token->isCancellationRequested())
+		return Expected<void>::fromMessage("Operation was cancelled");
+
 	QMap<QString, Wrapper>::iterator it = m_gfsMap.find(path);
 
 	if (it == m_gfsMap.end())
@@ -1125,6 +1135,10 @@ Expected<Wrapper> Map::getReadonly(const QString &path)
 		Expected<Wrapper> gfs = Wrapper::createReadOnly(path, m_gfsAction);
 		if (!gfs.isOk())
 			return gfs;
+
+		if (m_token && m_token->isCancellationRequested())
+			return Expected<void>::fromMessage("Operation was cancelled");
+
 		it = m_gfsMap.insert(path, gfs.get());
 	}
 

@@ -63,7 +63,7 @@ extern const char QEMU_IMG[];
 extern const char DISK_FORMAT[];
 extern const char DESCRIPTOR[];
 
-int run_prg(const char *name, const QStringList &lstArgs, QByteArray *out, QByteArray *err);
+int run_prg(const char *name, const QStringList &lstArgs, QByteArray *out, QByteArray *err, const Abort::token_type &token = Abort::token_type());
 
 ////////////////////////////////////////////////////////////
 // Logger
@@ -122,7 +122,7 @@ struct Call
 
 	int run(const char *name, const QStringList &lstArgs, QByteArray *out, QByteArray *err) const
 	{
-		return run_prg(name, lstArgs, out, err);
+		return run_prg(name, lstArgs, out, err, m_token);
 	}
 
 private:

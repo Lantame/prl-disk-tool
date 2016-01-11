@@ -42,18 +42,35 @@ bool Logger::s_verbose = false;
 
 namespace
 {
-enum {CMD_WORK_TIMEOUT = 60 * 60 * 1000};
+enum {CMD_WORK_STEPS = 60 * 60, CMD_WORK_STEP_TIME = 1000};
 }
 
 
-int run_prg(const char *name, const QStringList &lstArgs, QByteArray *out, QByteArray *err)
+int run_prg(const char *name, const QStringList &lstArgs, QByteArray *out, QByteArray *err, const Abort::token_type &token)
 {
 	QProcess proc;
 	proc.start(name, lstArgs);
-	if (!proc.waitForFinished(CMD_WORK_TIMEOUT))
+
+	int step;
+	for (step = 0; step < CMD_WORK_STEPS; ++step)
+	{
+		if (proc.waitForFinished(CMD_WORK_STEP_TIME))
+			break;
+
+		if (token && token->isCancellationRequested())
+		{
+			fprintf(stderr, "Execution of '%s' has been cancelled. Terminate it now.\n", name);
+			proc.kill();
+			proc.waitForFinished();
+			return -1;
+		}
+	}
+
+	if (step >= CMD_WORK_STEPS)
 	{
 		fprintf(stderr, "%s tool not responding. Terminate it now.", name);
 		proc.kill();
+		proc.waitForFinished();
 		return -1;
 	}
 	if (out)
