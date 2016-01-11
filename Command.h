@@ -126,10 +126,9 @@ private:
 struct Compact: DiskAware
 {
 	Compact(const DiskAware &disk, bool force,
-			const boost::optional<Call> &call,
-			const boost::optional<GuestFS::Action> &gfsAction):
+			const boost::optional<Call> &call):
 		DiskAware(disk),  m_force(force),
-		m_call(call), m_gfsAction(gfsAction)
+		m_call(call)
 	{
 	}
 
@@ -140,7 +139,6 @@ private:
 	bool m_force;
 
 	boost::optional<Call> m_call;
-	boost::optional<GuestFS::Action> m_gfsAction;
 };
 
 ////////////////////////////////////////////////////////////
