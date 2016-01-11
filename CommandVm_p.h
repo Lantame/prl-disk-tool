@@ -28,8 +28,8 @@
 /// Schaffhausen, Switzerland.
 ///
 ///////////////////////////////////////////////////////////////////////////////
-#ifndef COMMANDVM_H
-#define COMMANDVM_H
+#ifndef COMMANDVM_P_H
+#define COMMANDVM_P_H
 
 #include "Command.h"
 #include "GuestFSWrapper.h"
@@ -38,6 +38,9 @@
 
 namespace Command
 {
+
+////////////////////////////////////////////////////////////
+// ResizeData
 
 struct ResizeData
 {
@@ -64,9 +67,9 @@ struct ResizeData
 struct ResizeHelper
 {
 	ResizeHelper(const Image::Info &image,
-		const boost::optional<Call> &call = boost::optional<Call>(),
-		const boost::optional<GuestFS::Action> &gfsAction = boost::optional<GuestFS::Action>())
-	: m_image(image), m_adapter(call), m_call(call), m_gfsAction(gfsAction)
+		const GuestFS::Map &gfsMap,
+		const boost::optional<Call> &call = boost::optional<Call>())
+	: m_image(image), m_adapter(call), m_gfsMap(gfsMap), m_call(call)
 	{
 	}
 
@@ -77,7 +80,9 @@ struct ResizeHelper
 	Expected<quint64> getNewFSSize(quint64 mb, const Partition::Unit &lastPartition);
 	Expected<void> expandToFit(quint64 mb, const GuestFS::Wrapper &gfs);
 	Expected<void> mergeIntoPrevious(const QString &path);
-	Expected<GuestFS::Wrapper> getGFS(bool needWrite = false, const QString &path = QString());
+	Expected<GuestFS::Wrapper> getGFSWritable(const QString &path = QString());
+	Expected<GuestFS::Wrapper> getGFSReadonly();
+
 
 	const boost::optional<Call>& getCall() const
 	{
@@ -100,10 +105,8 @@ private:
 private:
 	const Image::Info &m_image;
 	CallAdapter m_adapter;
-	// Lazy-initialized.
-	QMap<QString, GuestFS::Wrapper> m_gfsMap;
+	GuestFS::Map m_gfsMap;
 	boost::optional<Call> m_call;
-	boost::optional<GuestFS::Action> m_gfsAction;
 };
 
 namespace Resizer
@@ -190,4 +193,4 @@ typedef boost::variant<
 
 } // namespace Resizer
 } // namespace Command
-#endif // COMMANDVM_H
+#endif // COMMANDVM_P_H

@@ -292,7 +292,7 @@ template <typename T>
 Expected<Factory<T> > Factory<T>::create(
 		const std::vector<std::string> &args,
 		const boost::optional<Call> &call,
-		const boost::optional<Action> &gfsAction)
+		const GuestFS::Map &gfsMap)
 {
 	po::variables_map vm;
 	try
@@ -305,7 +305,7 @@ Expected<Factory<T> > Factory<T>::create(
 	{
 		return Expected<Factory<T> >::fromMessage(e.what());
 	}
-	return Factory(vm, call, gfsAction);
+	return Factory(vm, call, gfsMap);
 }
 
 template<>
@@ -326,7 +326,7 @@ Expected<Resize> Factory<Resize>::operator()() const
 	if (!disk.isOk())
 		return disk;
 
-	return Resize(disk.get(), sizeMb, resizeLastPartition, force, m_call, m_gfsAction);
+	return Resize(disk.get(), sizeMb, resizeLastPartition, force, m_gfsMap, m_call);
 }
 
 template<>
@@ -352,7 +352,7 @@ Expected<Compact> Factory<Compact>::operator()() const
 	if (!disk.isOk())
 		return disk;
 
-	return Compact(disk.get(), force, m_call, m_gfsAction);
+	return Compact(disk.get(), force, m_call);
 }
 
 template<>
@@ -426,6 +426,7 @@ Visitor::Visitor(const ParsedCommand &cmd,
 		m_call = Call();
 		m_gfsAction = Action();
 	}
+	m_gfsMap = GuestFS::Map(m_gfsAction);
 	m_result = Expected<void>::fromMessage(QString("Unknown action: %1 %2").arg(
 					m_action, m_info ? "--info" : ""));
 }
@@ -465,7 +466,7 @@ Expected<Visitor> Visitor::create(const ParsedCommand &cmd)
 template <typename T>
 Expected<void> Visitor::createAndExecute() const
 {
-	Expected<Factory<T> > factory = Factory<T>::create(m_args, m_call, m_gfsAction);
+	Expected<Factory<T> > factory = Factory<T>::create(m_args, m_call, m_gfsMap);
 	if (!factory.isOk())
 		return factory;
 	Expected<T> cmdRes = factory.get()();

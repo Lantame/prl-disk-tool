@@ -1088,3 +1088,45 @@ Expected<quint64> Wrapper::getSectorSize() const
 		return Expected<quint64>::fromMessage("Unable to get sector size");
 	return ret;
 }
+
+////////////////////////////////////////////////////////////
+// Map
+
+Expected<Wrapper> Map::getWritable(const QString &path)
+{
+	QMap<QString, Wrapper>::iterator it = m_gfsMap.find(path);
+
+	if (it != m_gfsMap.end() && it.value().isReadOnly())
+	{
+		// call destructor to avoid concurrency
+		m_gfsMap.erase(it);
+		it = m_gfsMap.end();
+	}
+
+	if (it == m_gfsMap.end())
+	{
+		// create rw
+		Expected<Wrapper> gfs = Wrapper::create(path, m_gfsAction);
+		if (!gfs.isOk())
+			return gfs;
+		it = m_gfsMap.insert(path, gfs.get());
+	}
+
+	return it.value();
+}
+
+Expected<Wrapper> Map::getReadonly(const QString &path)
+{
+	QMap<QString, Wrapper>::iterator it = m_gfsMap.find(path);
+
+	if (it == m_gfsMap.end())
+	{
+		// create ro
+		Expected<Wrapper> gfs = Wrapper::createReadOnly(path, m_gfsAction);
+		if (!gfs.isOk())
+			return gfs;
+		it = m_gfsMap.insert(path, gfs.get());
+	}
+
+	return it.value();
+}

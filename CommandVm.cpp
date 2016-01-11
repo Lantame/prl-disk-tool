@@ -263,7 +263,7 @@ void ResizeData::print(const SizeUnitType &unitType) const
 
 Expected<Partition::Unit> ResizeHelper::getLastPartition()
 {
-	Expected<Wrapper> gfs = getGFS();
+	Expected<Wrapper> gfs = getGFSReadonly();
 	if (!gfs.isOk())
 		return gfs;
 
@@ -286,7 +286,7 @@ Expected<ResizeData> ResizeHelper::getResizeData()
 	}
 	info.m_lastPartition = lastPartition.get().getName();
 
-	Expected<Wrapper> gfs = getGFS();
+	Expected<Wrapper> gfs = getGFSReadonly();
 	if (!gfs.isOk())
 		return gfs;
 
@@ -347,7 +347,7 @@ Expected<QString> ResizeHelper::createTmpImage(quint64 mb, const QString &backin
 Expected<void> ResizeHelper::shrinkFSIfNeeded(quint64 mb)
 {
 	// GuestFS handle wrapper (we will need to write).
-	Expected<Wrapper> gfs = getGFS(true);
+	Expected<Wrapper> gfs = getGFSWritable();
 	if (!gfs.isOk())
 		return gfs;
 	Expected<Partition::Unit> lastPartition = gfs.get().getLastPartition();
@@ -381,7 +381,7 @@ Expected<void> ResizeHelper::expandToFit(quint64 mb, const Wrapper &gfs)
 	/* Getting partition table type fails on non-resized GPT.
 	 * So we take it from original image.
 	 */
-	Expected<Wrapper> oldGFS = getGFS();
+	Expected<Wrapper> oldGFS = getGFSReadonly();
 	if (!oldGFS.isOk())
 		return oldGFS;
 
@@ -450,33 +450,14 @@ Expected<void> ResizeHelper::mergeIntoPrevious(const QString &path)
 	return external.execute(snapshotChain);
 }
 
-Expected<Wrapper> ResizeHelper::getGFS(bool needWrite, const QString &path)
+Expected<Wrapper> ResizeHelper::getGFSWritable(const QString &path)
 {
-	QString key = path.isEmpty() ? m_image.getFilename() : path;
-	QMap<QString, Wrapper>::iterator it = m_gfsMap.find(key);
+	return m_gfsMap.getWritable(path.isEmpty() ? m_image.getFilename() : path);
+}
 
-	if (needWrite && (it == m_gfsMap.end() || it.value().isReadOnly()))
-	{
-		// call destructor to avoid concurrency
-		if (it != m_gfsMap.end())
-			m_gfsMap.erase(it);
-		// create rw
-		Expected<Wrapper> gfs = Wrapper::create(key, m_gfsAction);
-		if (!gfs.isOk())
-			return gfs;
-		m_gfsMap.insert(key, gfs.get());
-	}
-	else if (it == m_gfsMap.end())
-	{
-		// create ro
-		Expected<Wrapper> gfs = Wrapper::createReadOnly(key, m_gfsAction);
-		if (!gfs.isOk())
-			return gfs;
-		m_gfsMap.insert(key, gfs.get());
-	}
-
-	it = m_gfsMap.find(key);
-	return it.value();
+Expected<Wrapper> ResizeHelper::getGFSReadonly()
+{
+	return m_gfsMap.getReadonly(m_image.getFilename());
 }
 
 Expected<Partition::Stats> ResizeHelper::expandPartition(
@@ -529,7 +510,7 @@ Expected<Partition::Stats> ResizeHelper::calculateNewPartition(
 
 Expected<qint64> ResizeHelper::calculateFSDelta(quint64 mb, const Partition::Unit &lastPartition)
 {
-	Expected<Wrapper> gfs = getGFS();
+	Expected<Wrapper> gfs = getGFSReadonly();
 	if (!gfs.isOk())
 		return gfs;
 
@@ -556,7 +537,7 @@ Expected<mode_type> getModeIgnore(ResizeHelper& helper, quint64 sizeMb)
 	if (helper.getImage().getVirtualSize() > convertMbToBytes(sizeMb))
 		return mode_type(Ignore::Shrink());
 
-	Expected<Wrapper> gfs = helper.getGFS();
+	Expected<Wrapper> gfs = helper.getGFSReadonly();
 
 	if (!gfs.isOk())
 		return Expected<void>(gfs);
@@ -759,7 +740,7 @@ Expected<void> Consider::Expand::execute(ResizeHelper& helper, quint64 sizeMb) c
 	} BOOST_SCOPE_EXIT_END
 
 	Expected<void> res;
-	Expected<Wrapper> gfs = helper.getGFS(true, tmpPath.get());
+	Expected<Wrapper> gfs = helper.getGFSWritable(tmpPath.get());
 	if (!gfs.isOk())
 		return gfs;
 
@@ -803,7 +784,7 @@ Expected<void> Gpt<Ignore::Expand>::execute(ResizeHelper& helper, quint64 sizeMb
 		return res;
 
 	// Windows does not see additional space if backup GPT header is not moved.
-	Expected<Wrapper> gfs = helper.getGFS(true);
+	Expected<Wrapper> gfs = helper.getGFSWritable();
 	if (!gfs.isOk())
 		return gfs;
 
@@ -1043,7 +1024,7 @@ Expected<void> Resize::execute() const
 	if (convertMbToBytes(m_sizeMb) == snapshotChain.getList().last().getVirtualSize())
 		return Expected<void>();
 
-	ResizeHelper helper(snapshotChain.getList().last(), m_call, m_gfsAction);
+	ResizeHelper helper(snapshotChain.getList().last(), m_gfsMap, m_call);
 
 	Expected<Resizer::mode_type> mode = m_resizeLastPartition ?
 		Resizer::getModeConsider(helper, m_sizeMb) :
@@ -1067,7 +1048,7 @@ Expected<void> ResizeInfo::execute() const
 	if (!result.isOk())
 		return result;
 	Image::Chain snapshotChain = result.get();
-	ResizeHelper resizer(snapshotChain.getList().last());
+	ResizeHelper resizer(snapshotChain.getList().last(), GuestFS::Map());
 	Expected<ResizeData> infoRes = resizer.getResizeData();
 	if (!infoRes.isOk())
 		return infoRes;

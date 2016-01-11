@@ -481,6 +481,25 @@ private:
 	bool m_readOnly;
 };
 
+////////////////////////////////////////////////////////////
+// Map
+
+struct Map
+{
+	Map(const boost::optional<Action> action = boost::optional<Action>()):
+		m_gfsAction(action)
+	{
+	}
+
+	Expected<Wrapper> getWritable(const QString &path);
+	Expected<Wrapper> getReadonly(const QString &path);
+
+
+private:
+	QMap<QString, GuestFS::Wrapper> m_gfsMap;
+	boost::optional<Action> m_gfsAction;
+};
+
 } // namespace GuestFS
 
 #endif // GUESTFS_WRAPPER_H
