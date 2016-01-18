@@ -600,9 +600,9 @@ Expected<quint64> Ext::getMinSize(const struct statvfs &stats) const
 		return Expected<quint64>::fromMessage(IDS_ERR_CANNOT_GET_MIN_SIZE, ret);
 	return ret;
 #else
-	char a1[] = "resize2fs", a2[] = "-P";
+	char a1[] = "resize2fs", a2[] = "-P", a3[] = "-f";
 	QByteArray ba = m_partition.toUtf8();
-	char *cmd[] = {a1, a2, ba.data(), NULL};
+	char *cmd[] = {a1, a2, a3, ba.data(), NULL};
 	char *ret = guestfs_debug(m_g, "sh", cmd);
 	QString output(ret);
 	free(ret);
