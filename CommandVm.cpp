@@ -649,17 +649,24 @@ namespace Resizer
 
 Expected<mode_type> getModeIgnore(ResizeHelper& helper, quint64 sizeMb)
 {
-	if (helper.getImage().getVirtualSize() > convertMbToBytes(sizeMb))
-		return mode_type(Ignore::Shrink());
-
 	Expected<Wrapper> gfs = helper.getGFSReadonly();
-
 	if (!gfs.isOk())
 		return Expected<void>(gfs);
 
 	Expected<QString> partTable = gfs.get().getPartitionTable();
 	if (!partTable.isOk())
+	{
+		if (partTable.getCode() == ERR_NO_PARTITION_TABLE)
+		{
+			return (helper.getImage().getVirtualSize() > convertMbToBytes(sizeMb)) ?
+			       mode_type(Ignore::Shrink<void>()) :
+			       mode_type(Ignore::Expand());
+		}
 		return Expected<void>(partTable);
+	}
+
+	if (helper.getImage().getVirtualSize() > convertMbToBytes(sizeMb))
+		return mode_type(Ignore::Shrink<VirtResize>());
 
 	if (partTable.get() == "gpt")
 		return mode_type(Gpt<Ignore::Expand>(Ignore::Expand()));
@@ -723,10 +730,15 @@ void Primary::fillVirtResize(quint64 newSize, VirtResize &resize) const
 
 } // namespace Partition
 
-////////////////////////////////////////////////////////////
-// Ignore::Shrink
+namespace Ignore
+{
 
-Expected<void> Ignore::Shrink::execute(ResizeHelper& helper, quint64 sizeMb) const
+////////////////////////////////////////////////////////////
+// Shrink
+
+template<>
+Expected<void> Shrink<VirtResize>::execute(
+		ResizeHelper &helper, quint64 sizeMb) const
 {
 	CallAdapter adapter(helper.getCall());
 	const Image::Info& image = helper.getImage();
@@ -734,7 +746,7 @@ Expected<void> Ignore::Shrink::execute(ResizeHelper& helper, quint64 sizeMb) con
 	Expected<QString> tmpPath = helper.createTmpImage(sizeMb);
 	if (!tmpPath.isOk())
 		return tmpPath;
-	BOOST_SCOPE_EXIT(&tmpPath)
+	BOOST_SCOPE_EXIT_TPL(&tmpPath)
 	{
 		QFile::remove(tmpPath.get());
 	} BOOST_SCOPE_EXIT_END
@@ -746,7 +758,23 @@ Expected<void> Ignore::Shrink::execute(ResizeHelper& helper, quint64 sizeMb) con
 	return res;
 }
 
-Expected<void> Ignore::Shrink::checkSpace(const Image::Info &image) const
+template<>
+Expected<void> Shrink<void>::execute(
+		ResizeHelper &helper, quint64 sizeMb) const
+{
+	CallAdapter adapter(helper.getCall());
+	const Image::Info& image = helper.getImage();
+
+	Expected<QString> tmpPath = helper.createTmpImage(sizeMb);
+	if (!tmpPath.isOk())
+		return tmpPath;
+
+	adapter.rename(tmpPath.get(), image.getFilename());
+	return Expected<void>();
+}
+
+template <typename T>
+Expected<void> Shrink<T>::checkSpace(const Image::Info &image) const
 {
 	quint64 avail = getAvailableSpace(image.getFilename());
 	quint64 resultSize = image.getActualSize();
@@ -761,7 +789,7 @@ Expected<void> Ignore::Shrink::checkSpace(const Image::Info &image) const
 }
 
 ////////////////////////////////////////////////////////////
-// Ignore::Expand
+// Expand
 
 Expected<void> Ignore::Expand::execute(ResizeHelper& helper, quint64 sizeMb) const
 {
@@ -778,7 +806,7 @@ Expected<void> Ignore::Expand::execute(ResizeHelper& helper, quint64 sizeMb) con
 	return Expected<void>();
 }
 
-Expected<void> Ignore::Expand::checkSpace(
+Expected<void> Expand::checkSpace(
 		const Image::Info &image, quint64 sizeMb) const
 {
 	quint64 avail = getAvailableSpace(image.getFilename());
@@ -792,6 +820,8 @@ Expected<void> Ignore::Expand::checkSpace(
 	}
 	return Expected<void>();
 }
+
+} // namespace Ignore
 
 ////////////////////////////////////////////////////////////
 // Consider::Shrink
