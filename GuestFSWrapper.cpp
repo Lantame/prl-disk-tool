@@ -934,6 +934,11 @@ Expected<void> Wrapper::expandGPT() const
 	if (!m_gfsAction)
 		return Expected<void>();
 
+#ifdef NEW_GUESTFS
+	int ret = guestfs_part_expand_gpt(m_g.get(), GUESTFS_DEVICE);
+	if (ret < 0)
+		return Expected<void>::fromMessage("Unable to move GPT backup header");
+#else
 	char a1[] = "sgdisk", a2[] = "-e", a3[] = "-v";
 	QByteArray device(GUESTFS_DEVICE);
 	char *cmd[] = {a1, a2, device.data(), NULL};
@@ -957,7 +962,7 @@ Expected<void> Wrapper::expandGPT() const
 		return Expected<void>::fromMessage(
 				QString("sgdisk error. it returned:\n%1").arg(output));
 	}
-
+#endif // NEW_GUESTFS
 	return Expected<void>();
 }
 
