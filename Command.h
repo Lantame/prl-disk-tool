@@ -138,6 +138,7 @@ struct ResizeInfo: Default
 	}
 
 	Expected<void> execute() const;
+	Expected<void> executePloop() const;
 
 private:
 	SizeUnitType m_unitType;
