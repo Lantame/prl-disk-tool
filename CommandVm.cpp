@@ -185,6 +185,48 @@ QString printSize(quint64 bytes, SizeUnitType unitType)
 
 namespace Command
 {
+namespace Visitor
+{
+
+////////////////////////////////////////////////////////////
+// FillResize
+
+struct FillResize: boost::static_visitor<void>
+{
+	FillResize(const QString &name, quint64 newSize, VirtResize &resize):
+		m_name(name), m_newSize(newSize), m_resize(resize)
+	{
+	}
+
+	template <class T>
+	void operator() (const T &fs);
+
+private:
+	QString m_name;
+	quint64 m_newSize;
+	VirtResize &m_resize;
+};
+
+template<> void FillResize::operator() (const Swap &fs)
+{
+	Q_UNUSED(fs);
+	m_resize.resizeForce(m_name, m_newSize);
+}
+
+template<> void FillResize::operator() (const Ntfs &fs)
+{
+	Q_UNUSED(fs);
+	m_resize.shrink(m_name);
+	m_resize.noExpandContent();
+}
+
+template <class T> void FillResize::operator() (const T &fs)
+{
+	Q_UNUSED(fs);
+	m_resize.shrink(m_name);
+}
+
+} // namespace Visitor
 
 ////////////////////////////////////////////////////////////
 // ResizeData
@@ -480,6 +522,93 @@ Expected<qint64> ResizeHelper::calculateFSDelta(quint64 mb, const Partition::Uni
 	return fsDelta;
 }
 
+template<> Expected<void> ResizeHelper::resizeContent(
+		const Resizer::Partition::Extended& partition, qint64 delta)
+{
+	Expected<Partition::Stats> logicalStats = partition.lastChild.getStats();
+	if (!logicalStats.isOk())
+		return logicalStats;
+	Expected<Partition::Stats> containerStats = partition.unit.getStats();
+	if (!containerStats.isOk())
+		return containerStats;
+
+	quint64 containerTail = containerStats.get().end - logicalStats.get().end;
+	qint64 contentDelta = delta + containerTail;
+	if (contentDelta >= 0)
+	{
+		return Expected<void>();
+	}
+
+	Expected<void> res;
+	if (!(res = resizeContent(Resizer::Partition::Logical(
+						partition.lastChild), contentDelta)).isOk())
+		return res;
+
+	Expected<Wrapper> gfs = getGFSWritable();
+	if (!gfs.isOk())
+		return gfs;
+
+	Expected<quint64> sectorSize = gfs.get().getSectorSize();
+	if (!sectorSize.isOk())
+		return sectorSize;
+	// startSector remains unmodified.
+	quint64 startSector = logicalStats.get().start / sectorSize.get();
+	// If end + ctDelta == N * sectorSize - 1 (last byte of sector) -> endSector = N - 1
+	// Else	                                                        -> endSector = N - 2
+	quint64 endSector = (logicalStats.get().end + contentDelta + 1) / sectorSize.get() - 1;
+	return gfs.get().resizePartition(partition.lastChild, startSector, endSector);
+}
+
+template <class T> Expected<void> ResizeHelper::resizeContent(
+		const T& partition, qint64 delta)
+{
+	return partition.unit.shrinkFilesystem(-delta);
+}
+
+template <class T>
+Expected<void> ResizeHelper::shrinkContent(const T &partition, quint64 mb, VirtResize &resize)
+{
+	Expected<qint64> delta = calculateFSDelta(mb, partition.unit);
+	if (!delta.isOk())
+		return delta;
+	if (delta.get() >= 0)
+		return Expected<void>();
+
+	Expected<void> res;
+	if (!(res = resizeContent(partition, delta.get())).isOk())
+		return res;
+
+	Expected<quint64> newSize = getNewFSSize(mb, partition.unit);
+	if (!newSize.isOk())
+		return newSize;
+	partition.fillVirtResize(newSize.get(), resize);
+	return Expected<void>();
+}
+
+Expected<void> ResizeHelper::shrinkContent(quint64 mb, VirtResize &resize)
+{
+	Expected<Wrapper> gfs = getGFSWritable();
+	if (!gfs.isOk())
+		return Expected<void>(gfs);
+	Expected<Partition::Unit> lastPartition = gfs.get().getLastPartition();
+	if (!lastPartition.isOk())
+		return Expected<void>(lastPartition);
+
+	Expected<bool> logical = lastPartition.get().isLogical();
+	if (!logical.isOk())
+		return Expected<void>(logical);
+	if (logical.get())
+	{
+		Expected<Partition::Unit> container = gfs.get().getContainer();
+		if (!container.isOk())
+			return container;
+
+		return shrinkContent(Resizer::Partition::Extended(
+					container.get(), lastPartition.get()), mb, resize);
+	}
+	return shrinkContent(Resizer::Partition::Primary(lastPartition.get()), mb, resize);
+}
+
 ////////////////////////////////////////////////////////////
 // VirtResize
 
@@ -539,7 +668,7 @@ Expected<mode_type> getModeIgnore(ResizeHelper& helper, quint64 sizeMb)
 
 Expected<mode_type> getModeConsider(ResizeHelper &helper, quint64 sizeMb)
 {
-	Expected<Partition::Unit> lastPartition = helper.getLastPartition();
+	Expected<GuestFS::Partition::Unit> lastPartition = helper.getLastPartition();
 	if (lastPartition.isOk())
 	{
 		Expected<bool> fsSupported = lastPartition.get().isFilesystemSupported();
@@ -568,6 +697,31 @@ Expected<mode_type> getModeConsider(ResizeHelper &helper, quint64 sizeMb)
 		return Expected<void>(lastPartition);
 	}
 }
+
+namespace Partition
+{
+
+////////////////////////////////////////////////////////////
+// Extended
+
+void Extended::fillVirtResize(quint64 newSize, VirtResize &resize) const
+{
+	// virt-resize does not understand logical,
+	// so force-resize container
+	resize.resizeForce(unit.getName(), newSize);
+}
+
+////////////////////////////////////////////////////////////
+// Primary
+
+void Primary::fillVirtResize(quint64 newSize, VirtResize &resize) const
+{
+	const fs_type &fs = unit.getFilesystem();
+	Visitor::FillResize v(unit.getName(), newSize, resize);
+	boost::apply_visitor(v, fs);
+}
+
+} // namespace Partition
 
 ////////////////////////////////////////////////////////////
 // Ignore::Shrink
@@ -669,26 +823,10 @@ Expected<void> Consider::Shrink::execute(ResizeHelper& helper, quint64 sizeMb) c
 		}
 	} BOOST_SCOPE_EXIT_END
 
-	Expected<void> res;
-	if (!(res = helper.shrinkFSIfNeeded(sizeMb)).isOk())
-		return res;
-	Expected<Partition::Unit> lastPartition = helper.getLastPartition();
-	if (!lastPartition.isOk())
-		return lastPartition;
 	VirtResize resize(adapter);
-	if (lastPartition.get().getFilesystem<Swap>() != NULL)
-	{
-		Expected<quint64> newSize = helper.getNewFSSize(sizeMb, lastPartition.get());
-		if (!newSize.isOk())
-			return newSize;
-		resize.resizeForce(lastPartition.get().getName(), newSize.get());
-	}
-	else
-	{
-		resize.shrink(lastPartition.get().getName());
-		if (lastPartition.get().getFilesystem<Ntfs>() != NULL)
-			resize.noExpandContent();
-	}
+	Expected<void> res;
+	if (!(res = helper.shrinkContent(sizeMb, resize)).isOk())
+		return res;
 	if (!(res = resize(image.getFilename(), tmpPath.get())).isOk())
 		return res;
 	adapter.rename(tmpPath.get(), image.getFilename());
