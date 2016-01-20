@@ -181,55 +181,7 @@ QString printSize(quint64 bytes, SizeUnitType unitType)
 	return QString(out.str().c_str());
 }
 
-////////////////////////////////////////////////////////////
-// VirtResize
-
-struct VirtResize
-{
-	VirtResize(const CallAdapter &adapter):
-		m_adapter(adapter)
-	{
-	}
-
-	VirtResize& noExpandContent()
-	{
-		m_args << "--no-expand-content";
-		return *this;
-	}
-
-	VirtResize& shrink(const QString &partition)
-	{
-		m_args << "--shrink" << partition;
-		return *this;
-	}
-
-	VirtResize& resizeForce(const QString &partition, quint64 size)
-	{
-		m_args << "--resize-force" << QString("%1=%2b").arg(partition).arg(size);
-		return *this;
-	}
-
-	Expected<void> operator() (const QString &src, const QString &dst)
-	{
-		m_args << "--machine-readable" << "--ntfsresize-force" << src << dst;
-		int ret = m_adapter.run(VIRT_RESIZE, m_args, NULL, NULL);
-		Expected<void> res;
-		if (ret)
-		{
-			res = Expected<void>::fromMessage(QString(IDS_ERR_SUBPROGRAM_RETURN_CODE)
-											  .arg(VIRT_RESIZE).arg(m_args.join(" ")).arg(ret));
-		}
-		m_args.clear();
-		return res;
-	}
-
-private:
-	QStringList m_args;
-	CallAdapter m_adapter;
-};
-
 } // namespace
-
 
 namespace Command
 {
@@ -526,6 +478,41 @@ Expected<qint64> ResizeHelper::calculateFSDelta(quint64 mb, const Partition::Uni
 	Logger::info(QString("delta: %1 overhead: %2 tail: %3 fs delta: %4")
 				 .arg(delta).arg(overhead.get()).arg(tail).arg(fsDelta));
 	return fsDelta;
+}
+
+////////////////////////////////////////////////////////////
+// VirtResize
+
+VirtResize& VirtResize::noExpandContent()
+{
+	m_args << "--no-expand-content";
+	return *this;
+}
+
+VirtResize& VirtResize::shrink(const QString &partition)
+{
+	m_args << "--shrink" << partition;
+	return *this;
+}
+
+VirtResize& VirtResize::resizeForce(const QString &partition, quint64 size)
+{
+	m_args << "--resize-force" << QString("%1=%2b").arg(partition).arg(size);
+	return *this;
+}
+
+Expected<void> VirtResize::operator() (const QString &src, const QString &dst)
+{
+	m_args << "--machine-readable" << "--ntfsresize-force" << src << dst;
+	int ret = m_adapter.run(VIRT_RESIZE, m_args, NULL, NULL);
+	Expected<void> res;
+	if (ret)
+	{
+		res = Expected<void>::fromMessage(QString(IDS_ERR_SUBPROGRAM_RETURN_CODE)
+										  .arg(VIRT_RESIZE).arg(m_args.join(" ")).arg(ret));
+	}
+	m_args.clear();
+	return res;
 }
 
 namespace Resizer

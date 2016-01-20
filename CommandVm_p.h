@@ -62,6 +62,27 @@ struct ResizeData
 };
 
 ////////////////////////////////////////////////////////////
+// VirtResize
+
+struct VirtResize
+{
+	VirtResize(const CallAdapter &adapter):
+		m_adapter(adapter)
+	{
+	}
+
+	VirtResize& noExpandContent();
+	VirtResize& shrink(const QString &partition);
+	VirtResize& resizeForce(const QString &partition, quint64 size);
+
+	Expected<void> operator() (const QString &src, const QString &dst);
+
+private:
+	QStringList m_args;
+	CallAdapter m_adapter;
+};
+
+////////////////////////////////////////////////////////////
 // ResizeHelper
 
 struct ResizeHelper
