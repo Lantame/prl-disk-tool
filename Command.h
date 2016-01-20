@@ -40,6 +40,7 @@
 #include "Expected.h"
 #include "GuestFSWrapper.h"
 #include "ImageInfo.h"
+#include "Abort.h"
 
 namespace Command
 {
@@ -77,104 +78,6 @@ protected:
 	}
 };
 
-namespace Resizer
-{
-namespace Ignore
-{
-
-////////////////////////////////////////////////////////////
-// Shrink
-
-struct Shrink
-{
-	Expected<void> execute(
-			const Image::Info &image, quint64 sizeMb,
-			const boost::optional<Call> &call,
-			const boost::optional<GuestFS::Action> &gfsAction) const;
-
-	Expected<void> checkSpace(const Image::Info &image) const;
-};
-
-////////////////////////////////////////////////////////////
-// Expand
-
-struct Expand
-{
-	Expected<void> execute(
-			const Image::Info &image, quint64 sizeMb,
-			const boost::optional<Call> &call) const;
-
-	Expected<void> checkSpace(const Image::Info &image, quint64 sizeMb) const;
-};
-
-} // namespace Ignore
-
-namespace Consider
-{
-
-////////////////////////////////////////////////////////////
-// Shrink
-
-struct Shrink
-{
-	Expected<void> execute(
-			const Image::Info &image, quint64 sizeMb,
-			const boost::optional<Call> &call,
-			const boost::optional<GuestFS::Action> &gfsAction) const;
-
-	Expected<void> checkSpace(const Image::Info &image) const;
-};
-
-////////////////////////////////////////////////////////////
-// Expand
-
-struct Expand
-{
-	Expected<void> execute(
-			const Image::Info &image, quint64 sizeMb,
-			const boost::optional<Call> &call,
-			const boost::optional<GuestFS::Action> &gfsAction) const;
-
-	Expected<void> checkSpace(const Image::Info &image, quint64 sizeMb) const;
-};
-
-} // namespace Consider
-
-////////////////////////////////////////////////////////////
-// Gpt
-
-template <class T>
-struct Gpt
-{
-	Gpt(const T &mode):
-		m_mode(mode)
-	{
-	}
-
-	Expected<void> execute(
-			const Image::Info &image, quint64 sizeMb,
-			const boost::optional<Call> &call,
-			const boost::optional<GuestFS::Action> &gfsAction) const;
-
-	const T& getMode() const
-	{
-		return m_mode;
-	}
-
-private:
-	T m_mode;
-};
-
-typedef boost::variant<
-	Ignore::Shrink,
-	Ignore::Expand,
-	Gpt<Ignore::Expand>,
-	Consider::Shrink,
-	Consider::Expand
-	> mode_type;
-
-} // namespace Resizer
-
 ////////////////////////////////////////////////////////////
 // Resize
 
@@ -182,11 +85,11 @@ struct Resize: DiskAware
 {
 	Resize(const DiskAware &disk, quint64 sizeMb,
 		   bool resizeLastPartition, bool force,
-		   const boost::optional<Call> &call,
-		   const boost::optional<GuestFS::Action> &gfsAction):
+		   const GuestFS::Map &gfsMap,
+		   const boost::optional<Call> &call):
 		DiskAware(disk), m_sizeMb(sizeMb),
 		m_resizeLastPartition(resizeLastPartition), m_force(force),
-		m_call(call), m_gfsAction(gfsAction)
+		m_gfsMap(gfsMap), m_call(call)
 	{
 	}
 
@@ -198,8 +101,8 @@ private:
 	bool m_resizeLastPartition;
 	bool m_force;
 
+	GuestFS::Map m_gfsMap;
 	boost::optional<Call> m_call;
-	boost::optional<GuestFS::Action> m_gfsAction;
 };
 
 ////////////////////////////////////////////////////////////
@@ -224,10 +127,9 @@ private:
 struct Compact: DiskAware
 {
 	Compact(const DiskAware &disk, bool force,
-			const boost::optional<Call> &call,
-			const boost::optional<GuestFS::Action> &gfsAction):
+			const boost::optional<Call> &call):
 		DiskAware(disk),  m_force(force),
-		m_call(call), m_gfsAction(gfsAction)
+		m_call(call)
 	{
 	}
 
@@ -238,7 +140,6 @@ private:
 	bool m_force;
 
 	boost::optional<Call> m_call;
-	boost::optional<GuestFS::Action> m_gfsAction;
 };
 
 ////////////////////////////////////////////////////////////
@@ -386,15 +287,15 @@ struct Factory
 {
 	static Expected<Factory<T> > create(
 			const std::vector<std::string> &args, const boost::optional<Call> &call,
-			const boost::optional<GuestFS::Action> &gfsAction);
+			const GuestFS::Map &gfsMap);
 
 	Expected<T> operator()() const;
 
 private:
 	Factory(const boost::program_options::variables_map &vm,
 			const boost::optional<Call> &call,
-			const boost::optional<GuestFS::Action> &gfsAction):
-		m_vm(vm), m_call(call), m_gfsAction(gfsAction)
+			const GuestFS::Map &gfsMap):
+		m_vm(vm), m_call(call), m_gfsMap(gfsMap)
 	{
 	}
 
@@ -402,7 +303,7 @@ private:
 	boost::program_options::variables_map m_vm;
 
 	boost::optional<Call> m_call;
-	boost::optional<GuestFS::Action> m_gfsAction;
+	GuestFS::Map m_gfsMap;
 };
 
 } // namespace Command
@@ -442,9 +343,11 @@ private:
 	bool m_info;
 	std::vector<std::string> m_args;
 	Expected<void> m_result;
+	GuestFS::Map m_gfsMap;
 
 	boost::optional<Call> m_call;
 	boost::optional<GuestFS::Action> m_gfsAction;
+	Abort::token_type m_token;
 };
 
 ////////////////////////////////////////////////////////////

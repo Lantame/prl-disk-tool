@@ -46,6 +46,7 @@
 
 #include "Util.h"
 #include "Expected.h"
+#include "Abort.h"
 
 namespace GuestFS
 {
@@ -479,6 +480,27 @@ private:
 	Helper m_helper;
 	Partition::List m_partList;
 	bool m_readOnly;
+};
+
+////////////////////////////////////////////////////////////
+// Map
+
+struct Map
+{
+	Map(const boost::optional<Action> action = boost::optional<Action>(),
+		const Abort::token_type& token = Abort::token_type()):
+		m_token(token), m_gfsAction(action)
+	{
+	}
+
+	Expected<Wrapper> getWritable(const QString &path);
+	Expected<Wrapper> getReadonly(const QString &path);
+
+
+private:
+	QMap<QString, GuestFS::Wrapper> m_gfsMap;
+	Abort::token_type m_token;
+	boost::optional<Action> m_gfsAction;
 };
 
 } // namespace GuestFS

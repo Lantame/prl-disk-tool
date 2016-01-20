@@ -32,6 +32,8 @@
 #ifndef UTIL_H
 #define UTIL_H
 
+#include "Abort.h"
+
 #include <QStringList>
 #include <QByteArray>
 #include <QFile>
@@ -61,7 +63,7 @@ extern const char QEMU_IMG[];
 extern const char DISK_FORMAT[];
 extern const char DESCRIPTOR[];
 
-int run_prg(const char *name, const QStringList &lstArgs, QByteArray *out, QByteArray *err);
+int run_prg(const char *name, const QStringList &lstArgs, QByteArray *out, QByteArray *err, const Abort::token_type &token = Abort::token_type());
 
 ////////////////////////////////////////////////////////////
 // Logger
@@ -98,6 +100,14 @@ private:
 
 struct Call
 {
+	Call()
+	{
+	}
+
+	Call(const Abort::token_type &token): m_token(token)
+	{
+	}
+
 	bool rename(const QString &oldName, const QString &newName) const
 	{
 		if (QFile::exists(newName))
@@ -112,8 +122,11 @@ struct Call
 
 	int run(const char *name, const QStringList &lstArgs, QByteArray *out, QByteArray *err) const
 	{
-		return run_prg(name, lstArgs, out, err);
+		return run_prg(name, lstArgs, out, err, m_token);
 	}
+
+private:
+	Abort::token_type m_token;
 };
 
 ////////////////////////////////////////////////////////////

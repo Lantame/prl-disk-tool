@@ -37,6 +37,7 @@
 #include <boost/scope_exit.hpp>
 
 #include "Command.h"
+#include "CommandVm_p.h"
 #include "Util.h"
 #include "StringTable.h"
 #include "GuestFSWrapper.h"
@@ -227,369 +228,316 @@ private:
 	CallAdapter m_adapter;
 };
 
+} // namespace
+
+
+namespace Command
+{
+
 ////////////////////////////////////////////////////////////
 // ResizeData
 
-struct ResizeData
+void ResizeData::print(const SizeUnitType &unitType) const
 {
-	quint64 m_currentSize;
-	quint64 m_minSize;
-	quint64 m_minSizeKeepFS;
-	QString m_lastPartition;
-	bool m_fsSupported;
-	bool m_partitionSupported;
+	QString warnings;
+	if (!m_partitionSupported)
+		warnings.append("Unsupported partition\n");
+	else if (m_lastPartition.isEmpty())
+		warnings.append("No partitions found\n");
+	else if (!m_fsSupported)
+		warnings.append(IDS_DISK_INFO__RESIZE_WARN_FS_NOTSUPP).append("\n");
 
-	ResizeData(quint64 currentSize):
-		m_currentSize(currentSize), m_minSize(currentSize),
-		m_minSizeKeepFS(currentSize), m_fsSupported(true),
-		m_partitionSupported(true)
-	{
-	}
+	/// Output to console
+	Logger::print(IDS_DISK_INFO__HEAD);
+	Logger::print(QString("%1%2").arg(IDS_DISK_INFO__SIZE).arg(printSize(m_currentSize, unitType)));
+	Logger::print(QString("%1%2").arg(IDS_DISK_INFO__MIN).arg(printSize(m_minSize, unitType)));
+	Logger::print(QString("%1%2").arg(IDS_DISK_INFO__MIN_KEEP_FS).arg(printSize(m_minSizeKeepFS, unitType)));
 
-	void print(const SizeUnitType &unitType) const
-	{
-		QString warnings;
-		if (!m_partitionSupported)
-			warnings.append("Unsupported partition\n");
-		else if (m_lastPartition.isEmpty())
-			warnings.append("No partitions found\n");
-		else if (!m_fsSupported)
-			warnings.append(IDS_DISK_INFO__RESIZE_WARN_FS_NOTSUPP).append("\n");
-
-		/// Output to console
-		Logger::print(IDS_DISK_INFO__HEAD);
-		Logger::print(QString("%1%2").arg(IDS_DISK_INFO__SIZE).arg(printSize(m_currentSize, unitType)));
-		Logger::print(QString("%1%2").arg(IDS_DISK_INFO__MIN).arg(printSize(m_minSize, unitType)));
-		Logger::print(QString("%1%2").arg(IDS_DISK_INFO__MIN_KEEP_FS).arg(printSize(m_minSizeKeepFS, unitType)));
-
-		if (!warnings.isEmpty())
-			Logger::error(warnings);
-	}
-};
+	if (!warnings.isEmpty())
+		Logger::error(warnings);
+}
 
 ////////////////////////////////////////////////////////////
 // ResizeHelper
 
-struct ResizeHelper
+Expected<Partition::Unit> ResizeHelper::getLastPartition()
 {
-	ResizeHelper(const Image::Info &image,
-			const boost::optional<Call> &call = boost::optional<Call>(),
-			const boost::optional<Action> &gfsAction = boost::optional<Action>()):
-		m_image(image), m_adapter(call), m_call(call), m_gfsAction(gfsAction)
-	{
-	}
+	Expected<Wrapper> gfs = getGFSReadonly();
+	if (!gfs.isOk())
+		return gfs;
 
-	Expected<Partition::Unit> getLastPartition()
-	{
-		Expected<Wrapper> gfs = getGFS();
-		if (!gfs.isOk())
-			return gfs;
+	return gfs.get().getLastPartition();
+}
 
-		return gfs.get().getLastPartition();
-	}
-
-	Expected<ResizeData> getResizeData()
+Expected<ResizeData> ResizeHelper::getResizeData()
+{
+	ResizeData info(m_image.getVirtualSize());
+	Expected<Partition::Unit> lastPartition = getLastPartition();
+	if (!lastPartition.isOk())
 	{
-		ResizeData info(m_image.getVirtualSize());
-		Expected<Partition::Unit> lastPartition = getLastPartition();
-		if (!lastPartition.isOk())
+		if (lastPartition.getCode() == ERR_NO_PARTITIONS)
 		{
-			if (lastPartition.getCode() == ERR_NO_PARTITIONS)
-			{
-				info.m_minSizeKeepFS = 0;
-				return info;
-			}
-			// Something bad happened.
-			return lastPartition;
+			info.m_minSizeKeepFS = 0;
+			return info;
 		}
-		info.m_lastPartition = lastPartition.get().getName();
-
-		Expected<Wrapper> gfs = getGFS();
-		if (!gfs.isOk())
-			return gfs;
-
-		Expected<Partition::Stats> stats = lastPartition.get().getStats();
-		if (!stats.isOk())
-			return stats;
-
-		quint64 usedSpace = stats.get().end + 1;
-		quint64 tail = info.m_currentSize - usedSpace;
-		Expected<quint64> overhead = gfs.get().getVirtResizeOverhead();
-		if (!overhead.isOk())
-			return overhead;
-		// We always shrink using virt-resize, so overhead is present.
-		info.m_minSizeKeepFS = usedSpace + overhead.get();
-
-		Expected<quint64> partMinSize = lastPartition.get().getMinSize();
-		if (!partMinSize.isOk())
-		{
-			if (partMinSize.getCode() != ERR_UNSUPPORTED_FS)
-				return partMinSize;
-
-			info.m_fsSupported = false;
-			info.m_minSize = info.m_currentSize - tail + overhead.get();
-		}
-		else
-		{
-			Logger::info(QString("Minimum size: %1").arg(partMinSize.get()));
-			// total_space - space_after_start_of_last_partition + min_space_needed_for_partition_and_resize
-			info.m_minSize = info.m_currentSize - (stats.get().size + tail) +
-							 partMinSize.get() + overhead.get();
-		}
-		return info;
+		// Something bad happened.
+		return lastPartition;
 	}
+	info.m_lastPartition = lastPartition.get().getName();
 
-	/* Create image. For debugging needs, it works independently of Call value.
-	 * You should remove image using QFile::remove.*/
-	Expected<QString> createTmpImage(quint64 mb, const QString &backingFile = QString()) const
-	{
-		QStringList args;
-		args << "create" << "-f" << DISK_FORMAT;
-		if (backingFile.isEmpty())
-			args << "-o" << "lazy_refcounts=on";
-		else
-			args << "-o" << QString("backing_file=%1,lazy_refcounts=on").arg(backingFile);
+	Expected<Wrapper> gfs = getGFSReadonly();
+	if (!gfs.isOk())
+		return gfs;
 
-		QString tmpPath = getTmpImagePath(m_image.getFilename());
-		args << tmpPath << QString("%1M").arg(mb);
-		// Always create image.
-		int ret = CallAdapter(Call()).run(QEMU_IMG, args, NULL, NULL);
-		if (ret)
-		{
-			return Expected<QString>::fromMessage(QString(IDS_ERR_SUBPROGRAM_RETURN_CODE)
-			                                      .arg(QEMU_IMG).arg(args.join(" ")).arg(ret));
-		}
-		return tmpPath;
-	}
-
-	Expected<void> shrinkFSIfNeeded(quint64 mb)
-	{
-		// GuestFS handle wrapper (we will need to write).
-		Expected<Wrapper> gfs = getGFS(true);
-		if (!gfs.isOk())
-			return gfs;
-		Expected<Partition::Unit> lastPartition = gfs.get().getLastPartition();
-		if (!lastPartition.isOk())
-			return lastPartition;
-		Expected<qint64> fsDelta = calculateFSDelta(mb, lastPartition.get());
-		// NB: if delta = 1M and overhead = 3M we still need to shrink FS.
-		if (fsDelta.get() < 0)
-		{
-			// Shrinking empty space is not enough.
-			// We have to resize filesystem ourselves.
-			return lastPartition.get().shrinkFilesystem(-fsDelta.get());
-		}
-		return Expected<void>();
-	}
-
-	Expected<quint64> getNewFSSize(quint64 mb, const Partition::Unit &lastPartition)
-	{
-		Expected<qint64> fsDelta = calculateFSDelta(mb, lastPartition);
-		Expected<Partition::Stats> partStats = lastPartition.getStats();
-		if (!partStats.isOk())
-			return partStats;
-		return partStats.get().size + fsDelta.get();
-	}
-
-	/* Expands partition table(if needed), last partition and its filesystem. */
-	Expected<void> expandToFit(quint64 mb, const Wrapper &gfs)
-	{
-		Expected<void> res;
-
-		/* Getting partition table type fails on non-resized GPT.
-		 * So we take it from original image.
-		 */
-		Expected<Wrapper> oldGFS = getGFS();
-		if (!oldGFS.isOk())
-			return oldGFS;
-
-		Expected<QString> partTable = oldGFS.get().getPartitionTable();
-		if (!partTable.isOk())
-			return partTable;
-
-		// Move backup GPT header.
-		// We have to do it first because getting partition type
-		// with non-moved gpt backup header fails.
-		if (partTable.get() == "gpt")
-		{
-			if (!(res = gfs.expandGPT()).isOk())
-				return res;
-		}
-
-		Expected<Partition::Unit> lastPartition = gfs.getLastPartition();
-		if (!lastPartition.isOk())
-			return lastPartition;
-
-		Expected<bool> logical = lastPartition.get().isLogical();
-		if (!logical.isOk())
-			return logical;
-
-		Expected<Partition::Stats> stats = Partition::Stats();
-		if (logical.get())
-		{
-			// MBR partition table.
-			Expected<Partition::Unit> container = gfs.getContainer();
-			if (!container.isOk())
-				return container;
-
-			// We have to resize extended(container) partition.
-			if (!(stats = expandPartition(container.get(), mb,
-			                              partTable.get(), gfs)).isOk())
-				return stats;
-		}
-
-		if (!(stats = expandPartition(lastPartition.get(), mb,
-		                              partTable.get(), gfs)).isOk())
-			return stats;
-
-		if (!(res = lastPartition.get().resizeFilesystem(stats.get().size)).isOk())
-			return res;
-
-		return Expected<void>();
-	}
-
-	/* Merge given image into its base, rename base to path. */
-	Expected<void> mergeIntoPrevious(const QString &path)
-	{
-		// External merge
-		Expected<Merge::External::mode_type> mode = MergeSnapshots::getExternalMode(m_call);
-		if (!mode.isOk())
-			return mode;
-
-		Merge::External::Executor external(DiskAware(path), mode.get(), m_call);
-		Expected<Image::Chain> chain = Image::Unit(path).getChain();
-		if (!chain.isOk())
-			return chain;
-
-		const QList<Image::Info> &list = chain.get().getList();
-		// Take original image and overlay only.
-		Image::Chain snapshotChain(list.mid(list.length() - 2));
-		// TODO: Any ways to recover?
-		return external.execute(snapshotChain);
-	}
-
-	Expected<Wrapper> getGFS(bool needWrite = false, const QString &path = QString())
-	{
-		QString key = path.isEmpty() ? m_image.getFilename() : path;
-		QMap<QString, Wrapper>::iterator it = m_gfsMap.find(key);
-
-		if (needWrite && (it == m_gfsMap.end() || it.value().isReadOnly()))
-		{
-			// call destructor to avoid concurrency
-			if (it != m_gfsMap.end())
-				m_gfsMap.erase(it);
-			// create rw
-			Expected<Wrapper> gfs = Wrapper::create(key, m_gfsAction);
-			if (!gfs.isOk())
-				return gfs;
-			m_gfsMap.insert(key, gfs.get());
-		}
-		else if (it == m_gfsMap.end())
-		{
-			// create ro
-			Expected<Wrapper> gfs = Wrapper::createReadOnly(key, m_gfsAction);
-			if (!gfs.isOk())
-				return gfs;
-			m_gfsMap.insert(key, gfs.get());
-		}
-
-		it = m_gfsMap.find(key);
-		return it.value();
-	}
-
-private:
-	Expected<Partition::Stats> expandPartition(
-	        const Partition::Unit &partition, quint64 mb,
-	        const QString &partTable, const Wrapper &gfs)
-	{
-		Expected<Partition::Stats> stats = partition.getStats();
-		if (!stats.isOk())
-			return stats;
-
-		Expected<quint64> sectorSize = gfs.getSectorSize();
-		if (!sectorSize.isOk())
-			return sectorSize;
-
-		stats = calculateNewPartition(
-				mb, stats.get(), sectorSize.get(), partTable);
-		if (!stats.isOk())
-			return stats;
-
-		Expected<void> res = gfs.resizePartition(
-				partition, stats.get().start / sectorSize.get(),
-				stats.get().end / sectorSize.get());
-		if (!res.isOk())
-			return res;
+	Expected<Partition::Stats> stats = lastPartition.get().getStats();
+	if (!stats.isOk())
 		return stats;
-	}
 
-	Expected<Partition::Stats> calculateNewPartition(
-			quint64 mb, const Partition::Stats &stats,
-			quint64 sectorSize, const QString &partTable)
+	quint64 usedSpace = stats.get().end + 1;
+	quint64 tail = info.m_currentSize - usedSpace;
+	Expected<quint64> overhead = gfs.get().getVirtResizeOverhead();
+	if (!overhead.isOk())
+		return overhead;
+	// We always shrink using virt-resize, so overhead is present.
+	info.m_minSizeKeepFS = usedSpace + overhead.get();
+
+	Expected<quint64> partMinSize = lastPartition.get().getMinSize();
+	if (!partMinSize.isOk())
 	{
-		Partition::Stats newStats;
+		if (partMinSize.getCode() != ERR_UNSUPPORTED_FS)
+			return partMinSize;
 
-		// New partition will end on this sector (including).
-		quint64 endSector = convertMbToBytes(mb) / sectorSize - 1;
-		if (partTable == "gpt")
-		{
-			quint64 tail = m_image.getVirtualSize() - stats.end - 1;
-			// If gpt backup space was less than our default then we use it.
-			endSector = (convertMbToBytes(mb) - qMin(
-						tail, GPT_DEFAULT_END_SECTS * sectorSize
-						)) / sectorSize - 1;
-		}
-
-		newStats.start = stats.start;
-		newStats.end = (endSector + 1) * sectorSize - 1;
-		newStats.size = newStats.end - newStats.start + 1;
-		return newStats;
+		info.m_fsSupported = false;
+		info.m_minSize = info.m_currentSize - tail + overhead.get();
 	}
-
-	Expected<qint64> calculateFSDelta(quint64 mb, const Partition::Unit &lastPartition)
+	else
 	{
-		Expected<Wrapper> gfs = getGFS();
-		if (!gfs.isOk())
-			return gfs;
-
-		qint64 delta = (qint64)convertMbToBytes(mb) - (qint64)m_image.getVirtualSize();
-		Expected<Partition::Stats> partStats = lastPartition.getStats();
-		if (!partStats.isOk())
-			return partStats;
-		// Free space after last partition.
-		quint64 tail = m_image.getVirtualSize() - partStats.get().end - 1;
-		Expected<quint64> overhead = gfs.get().getVirtResizeOverhead();
-		if (!overhead.isOk())
-			return overhead;
-		qint64 fsDelta = delta - overhead.get() + tail;
-		Logger::info(QString("delta: %1 overhead: %2 tail: %3 fs delta: %4")
-					 .arg(delta).arg(overhead.get()).arg(tail).arg(fsDelta));
-		return fsDelta;
+		Logger::info(QString("Minimum size: %1").arg(partMinSize.get()));
+		// total_space - space_after_start_of_last_partition + min_space_needed_for_partition_and_resize
+		info.m_minSize = info.m_currentSize - (stats.get().size + tail) +
+						 partMinSize.get() + overhead.get();
 	}
+	return info;
+}
 
-private:
-	const Image::Info &m_image;
-	CallAdapter m_adapter;
-	// Lazy-initialized.
-	QMap<QString, Wrapper> m_gfsMap;
-	boost::optional<Call> m_call;
-	boost::optional<Action> m_gfsAction;
-};
-
-} // namespace
-
-namespace Command
+/* Create image. For debugging needs, it works independently of Call value.
+ * You should remove image using QFile::remove.*/
+Expected<QString> ResizeHelper::createTmpImage(quint64 mb, const QString &backingFile) const
 {
+	QStringList args;
+	args << "create" << "-f" << DISK_FORMAT;
+	if (backingFile.isEmpty())
+		args << "-o" << "lazy_refcounts=on";
+	else
+		args << "-o" << QString("backing_file=%1,lazy_refcounts=on").arg(backingFile);
+
+	QString tmpPath = getTmpImagePath(m_image.getFilename());
+	args << tmpPath << QString("%1M").arg(mb);
+	// Always create image.
+	int ret = CallAdapter(Call()).run(QEMU_IMG, args, NULL, NULL);
+	if (ret)
+	{
+		return Expected<QString>::fromMessage(QString(IDS_ERR_SUBPROGRAM_RETURN_CODE)
+						      .arg(QEMU_IMG).arg(args.join(" ")).arg(ret));
+	}
+	return tmpPath;
+}
+
+Expected<void> ResizeHelper::shrinkFSIfNeeded(quint64 mb)
+{
+	// GuestFS handle wrapper (we will need to write).
+	Expected<Wrapper> gfs = getGFSWritable();
+	if (!gfs.isOk())
+		return gfs;
+	Expected<Partition::Unit> lastPartition = gfs.get().getLastPartition();
+	if (!lastPartition.isOk())
+		return lastPartition;
+	Expected<qint64> fsDelta = calculateFSDelta(mb, lastPartition.get());
+	// NB: if delta = 1M and overhead = 3M we still need to shrink FS.
+	if (fsDelta.get() < 0)
+	{
+		// Shrinking empty space is not enough.
+		// We have to resize filesystem ourselves.
+		return lastPartition.get().shrinkFilesystem(-fsDelta.get());
+	}
+	return Expected<void>();
+}
+
+Expected<quint64> ResizeHelper::getNewFSSize(quint64 mb, const Partition::Unit &lastPartition)
+{
+	Expected<qint64> fsDelta = calculateFSDelta(mb, lastPartition);
+	Expected<Partition::Stats> partStats = lastPartition.getStats();
+	if (!partStats.isOk())
+		return partStats;
+	return partStats.get().size + fsDelta.get();
+}
+
+/* Expands partition table(if needed), last partition and its filesystem. */
+Expected<void> ResizeHelper::expandToFit(quint64 mb, const Wrapper &gfs)
+{
+	Expected<void> res;
+
+	/* Getting partition table type fails on non-resized GPT.
+	 * So we take it from original image.
+	 */
+	Expected<Wrapper> oldGFS = getGFSReadonly();
+	if (!oldGFS.isOk())
+		return oldGFS;
+
+	Expected<QString> partTable = oldGFS.get().getPartitionTable();
+	if (!partTable.isOk())
+		return partTable;
+
+	// Move backup GPT header.
+	// We have to do it first because getting partition type
+	// with non-moved gpt backup header fails.
+	if (partTable.get() == "gpt")
+	{
+		if (!(res = gfs.expandGPT()).isOk())
+			return res;
+	}
+
+	Expected<Partition::Unit> lastPartition = gfs.getLastPartition();
+	if (!lastPartition.isOk())
+		return lastPartition;
+
+	Expected<bool> logical = lastPartition.get().isLogical();
+	if (!logical.isOk())
+		return logical;
+
+	Expected<Partition::Stats> stats = Partition::Stats();
+	if (logical.get())
+	{
+		// MBR partition table.
+		Expected<Partition::Unit> container = gfs.getContainer();
+		if (!container.isOk())
+			return container;
+
+		// We have to resize extended(container) partition.
+		if (!(stats = expandPartition(container.get(), mb,
+					      partTable.get(), gfs)).isOk())
+			return stats;
+	}
+
+	if (!(stats = expandPartition(lastPartition.get(), mb,
+				      partTable.get(), gfs)).isOk())
+		return stats;
+
+	if (!(res = lastPartition.get().resizeFilesystem(stats.get().size)).isOk())
+		return res;
+
+	return Expected<void>();
+}
+
+/* Merge given image into its base, rename base to path. */
+Expected<void> ResizeHelper::mergeIntoPrevious(const QString &path)
+{
+	// External merge
+	Expected<Merge::External::mode_type> mode = MergeSnapshots::getExternalMode(m_call);
+	if (!mode.isOk())
+		return mode;
+
+	Merge::External::Executor external(DiskAware(path), mode.get(), m_call);
+	Expected<Image::Chain> chain = Image::Unit(path).getChain();
+	if (!chain.isOk())
+		return chain;
+
+	const QList<Image::Info> &list = chain.get().getList();
+	// Take original image and overlay only.
+	Image::Chain snapshotChain(list.mid(list.length() - 2));
+	// TODO: Any ways to recover?
+	return external.execute(snapshotChain);
+}
+
+Expected<Wrapper> ResizeHelper::getGFSWritable(const QString &path)
+{
+	return m_gfsMap.getWritable(path.isEmpty() ? m_image.getFilename() : path);
+}
+
+Expected<Wrapper> ResizeHelper::getGFSReadonly()
+{
+	return m_gfsMap.getReadonly(m_image.getFilename());
+}
+
+Expected<Partition::Stats> ResizeHelper::expandPartition(
+	const Partition::Unit &partition, quint64 mb,
+	const QString &partTable, const Wrapper &gfs)
+{
+	Expected<Partition::Stats> stats = partition.getStats();
+	if (!stats.isOk())
+		return stats;
+
+	Expected<quint64> sectorSize = gfs.getSectorSize();
+	if (!sectorSize.isOk())
+		return sectorSize;
+
+	stats = calculateNewPartition(
+			mb, stats.get(), sectorSize.get(), partTable);
+	if (!stats.isOk())
+		return stats;
+
+	Expected<void> res = gfs.resizePartition(
+			partition, stats.get().start / sectorSize.get(),
+			stats.get().end / sectorSize.get());
+	if (!res.isOk())
+		return res;
+	return stats;
+}
+
+Expected<Partition::Stats> ResizeHelper::calculateNewPartition(
+		quint64 mb, const Partition::Stats &stats,
+		quint64 sectorSize, const QString &partTable)
+{
+	Partition::Stats newStats;
+
+	// New partition will end on this sector (including).
+	quint64 endSector = convertMbToBytes(mb) / sectorSize - 1;
+	if (partTable == "gpt")
+	{
+		quint64 tail = m_image.getVirtualSize() - stats.end - 1;
+		// If gpt backup space was less than our default then we use it.
+		endSector = (convertMbToBytes(mb) - qMin(
+					tail, GPT_DEFAULT_END_SECTS * sectorSize
+					)) / sectorSize - 1;
+	}
+
+	newStats.start = stats.start;
+	newStats.end = (endSector + 1) * sectorSize - 1;
+	newStats.size = newStats.end - newStats.start + 1;
+	return newStats;
+}
+
+Expected<qint64> ResizeHelper::calculateFSDelta(quint64 mb, const Partition::Unit &lastPartition)
+{
+	Expected<Wrapper> gfs = getGFSReadonly();
+	if (!gfs.isOk())
+		return gfs;
+
+	qint64 delta = (qint64)convertMbToBytes(mb) - (qint64)m_image.getVirtualSize();
+	Expected<Partition::Stats> partStats = lastPartition.getStats();
+	if (!partStats.isOk())
+		return partStats;
+	// Free space after last partition.
+	quint64 tail = m_image.getVirtualSize() - partStats.get().end - 1;
+	Expected<quint64> overhead = gfs.get().getVirtResizeOverhead();
+	if (!overhead.isOk())
+		return overhead;
+	qint64 fsDelta = delta - overhead.get() + tail;
+	Logger::info(QString("delta: %1 overhead: %2 tail: %3 fs delta: %4")
+				 .arg(delta).arg(overhead.get()).arg(tail).arg(fsDelta));
+	return fsDelta;
+}
+
 namespace Resizer
 {
 
-Expected<mode_type> getModeIgnore(const Image::Info &info, quint64 sizeMb)
+Expected<mode_type> getModeIgnore(ResizeHelper& helper, quint64 sizeMb)
 {
-	if (info.getVirtualSize() > convertMbToBytes(sizeMb))
+	if (helper.getImage().getVirtualSize() > convertMbToBytes(sizeMb))
 		return mode_type(Ignore::Shrink());
-	ResizeHelper helper(info);
 
-	Expected<Wrapper> gfs = helper.getGFS();
+	Expected<Wrapper> gfs = helper.getGFSReadonly();
+
 	if (!gfs.isOk())
 		return Expected<void>(gfs);
 
@@ -602,9 +550,8 @@ Expected<mode_type> getModeIgnore(const Image::Info &info, quint64 sizeMb)
 	return mode_type(Ignore::Expand());
 }
 
-Expected<mode_type> getModeConsider(const Image::Info &info, quint64 sizeMb)
+Expected<mode_type> getModeConsider(ResizeHelper &helper, quint64 sizeMb)
 {
-	ResizeHelper helper(info);
 	Expected<Partition::Unit> lastPartition = helper.getLastPartition();
 	if (lastPartition.isOk())
 	{
@@ -614,11 +561,11 @@ Expected<mode_type> getModeConsider(const Image::Info &info, quint64 sizeMb)
 		else if (!fsSupported.get())
 		{
 			// Unsupported fs. Fallback to partition-unaware resize.
-			return getModeIgnore(info, sizeMb);
+			return getModeIgnore(helper, sizeMb);
 		}
 
 		// Partition-aware resize is safe.
-		if (info.getVirtualSize() > convertMbToBytes(sizeMb))
+		if (helper.getImage().getVirtualSize() > convertMbToBytes(sizeMb))
 			return mode_type(Consider::Shrink());
 		else
 			return mode_type(Consider::Expand());
@@ -626,7 +573,7 @@ Expected<mode_type> getModeConsider(const Image::Info &info, quint64 sizeMb)
 	else if (lastPartition.getCode() == ERR_NO_PARTITIONS)
 	{
 		// Safe to resize ignoring partitions.
-		return getModeIgnore(info, sizeMb);
+		return getModeIgnore(helper, sizeMb);
 	}
 	else
 	{
@@ -638,13 +585,10 @@ Expected<mode_type> getModeConsider(const Image::Info &info, quint64 sizeMb)
 ////////////////////////////////////////////////////////////
 // Ignore::Shrink
 
-Expected<void> Ignore::Shrink::execute(
-		const Image::Info &image, quint64 sizeMb,
-		const boost::optional<Call> &call,
-		const boost::optional<GuestFS::Action> &gfsAction) const
+Expected<void> Ignore::Shrink::execute(ResizeHelper& helper, quint64 sizeMb) const
 {
-	ResizeHelper helper(image, call, gfsAction);
-	CallAdapter adapter(call);
+	CallAdapter adapter(helper.getCall());
+	const Image::Info& image = helper.getImage();
 
 	Expected<QString> tmpPath = helper.createTmpImage(sizeMb);
 	if (!tmpPath.isOk())
@@ -678,14 +622,12 @@ Expected<void> Ignore::Shrink::checkSpace(const Image::Info &image) const
 ////////////////////////////////////////////////////////////
 // Ignore::Expand
 
-Expected<void> Ignore::Expand::execute(
-		const Image::Info &image, quint64 sizeMb,
-		const boost::optional<Call> &call) const
+Expected<void> Ignore::Expand::execute(ResizeHelper& helper, quint64 sizeMb) const
 {
-	CallAdapter adapter(call);
+	CallAdapter adapter(helper.getCall());
 	QStringList args;
 	// This is performed in-place.
-	args << "resize" << image.getFilename() << QString("%1M").arg(sizeMb);
+	args << "resize" << helper.getImage().getFilename() << QString("%1M").arg(sizeMb);
 	int ret = adapter.run(QEMU_IMG, args, NULL, NULL);
 	if (ret)
 	{
@@ -713,15 +655,12 @@ Expected<void> Ignore::Expand::checkSpace(
 ////////////////////////////////////////////////////////////
 // Consider::Shrink
 
-Expected<void> Consider::Shrink::execute(
-		const Image::Info &image, quint64 sizeMb,
-		const boost::optional<Call> &call,
-		const boost::optional<GuestFS::Action> &gfsAction) const
+Expected<void> Consider::Shrink::execute(ResizeHelper& helper, quint64 sizeMb) const
 {
-	ResizeHelper helper(image, call, gfsAction);
-	CallAdapter adapter(call);
+	CallAdapter adapter(helper.getCall());
 
 	Expected<QString> tmpPath = helper.createTmpImage(sizeMb);
+	const Image::Info& image = helper.getImage();
 	if (!tmpPath.isOk())
 		return tmpPath;
 	BOOST_SCOPE_EXIT(&tmpPath)
@@ -785,13 +724,10 @@ Expected<void> Consider::Shrink::checkSpace(const Image::Info &image) const
 ////////////////////////////////////////////////////////////
 // Consider::Expand
 
-Expected<void> Consider::Expand::execute(
-		const Image::Info &image, quint64 sizeMb,
-		const boost::optional<Call> &call,
-		const boost::optional<GuestFS::Action> &gfsAction) const
+Expected<void> Consider::Expand::execute(ResizeHelper& helper, quint64 sizeMb) const
 {
-	ResizeHelper helper(image, call, gfsAction);
-	CallAdapter adapter(call);
+	CallAdapter adapter(helper.getCall());
+	const Image::Info& image = helper.getImage();
 
 	// Create overlay to operate on.
 	Expected<QString> tmpPath = helper.createTmpImage(sizeMb, image.getFilename());
@@ -803,7 +739,7 @@ Expected<void> Consider::Expand::execute(
 	} BOOST_SCOPE_EXIT_END
 
 	Expected<void> res;
-	Expected<Wrapper> gfs = helper.getGFS(true, tmpPath.get());
+	Expected<Wrapper> gfs = helper.getGFSWritable(tmpPath.get());
 	if (!gfs.isOk())
 		return gfs;
 
@@ -840,19 +776,14 @@ Expected<void> Consider::Expand::checkSpace(
 // Gpt
 
 template <>
-Expected<void> Gpt<Ignore::Expand>::execute(
-		const Image::Info &image, quint64 sizeMb,
-		const boost::optional<Call> &call,
-		const boost::optional<GuestFS::Action> &gfsAction) const
+Expected<void> Gpt<Ignore::Expand>::execute(ResizeHelper& helper, quint64 sizeMb) const
 {
 	Expected<void> res;
-	if (!(res = m_mode.execute(image, sizeMb, call)).isOk())
+	if (!(res = m_mode.execute(helper, sizeMb)).isOk())
 		return res;
 
 	// Windows does not see additional space if backup GPT header is not moved.
-	// So we have to move it to the end of the disk.
-	ResizeHelper helper(image, call, gfsAction);
-	Expected<Wrapper> gfs = helper.getGFS(true);
+	Expected<Wrapper> gfs = helper.getGFSWritable();
 	if (!gfs.isOk())
 		return gfs;
 
@@ -901,11 +832,8 @@ private:
 
 struct Resize: boost::static_visitor<Expected<void> >
 {
-	Resize(const Image::Info &image, quint64 sizeMb,
-		   const boost::optional<Call> &call,
-		   const boost::optional<Action> &gfsAction):
-		m_image(image), m_sizeMb(sizeMb),
-		m_call(call), m_gfsAction(gfsAction)
+	Resize(ResizeHelper& helper, quint64 sizeMb):
+		m_helper(helper), m_sizeMb(sizeMb)
 	{
 	}
 
@@ -916,19 +844,17 @@ struct Resize: boost::static_visitor<Expected<void> >
 	Expected<void> checkSpace(const T &mode) const;
 
 private:
-	Image::Info m_image;
+	ResizeHelper &m_helper;
 	quint64 m_sizeMb;
-	boost::optional<Call> m_call;
-	boost::optional<Action> m_gfsAction;
 };
 
 template <>
 Expected<void> Resize::operator() (const Resizer::Ignore::Expand &mode) const
 {
-	Expected<void> res = mode.checkSpace(m_image, m_sizeMb);
+	Expected<void> res = mode.checkSpace(m_helper.getImage(), m_sizeMb);
 	if (!res.isOk())
 		return res;
-	return mode.execute(m_image, m_sizeMb, m_call);
+	return mode.execute(m_helper, m_sizeMb);
 }
 
 template <class T>
@@ -937,31 +863,31 @@ Expected<void> Resize::operator() (const T &mode) const
 	Expected<void> res = checkSpace(mode);
 	if (!res.isOk())
 		return res;
-	return mode.execute(m_image, m_sizeMb, m_call, m_gfsAction);
+	return mode.execute(m_helper, m_sizeMb);
 }
 
 template<> Expected<void> Resize::checkSpace(
 		const Resizer::Gpt<Resizer::Ignore::Expand> &mode) const
 {
-	return mode.getMode().checkSpace(m_image, m_sizeMb);
+	return mode.getMode().checkSpace(m_helper.getImage(), m_sizeMb);
 }
 
 template<> Expected<void> Resize::checkSpace(
 		const Resizer::Ignore::Expand &mode) const
 {
-	return mode.checkSpace(m_image, m_sizeMb);
+	return mode.checkSpace(m_helper.getImage(), m_sizeMb);
 }
 
 template<> Expected<void> Resize::checkSpace(
 		const Resizer::Consider::Expand &mode) const
 {
-	return mode.checkSpace(m_image, m_sizeMb);
+	return mode.checkSpace(m_helper.getImage(), m_sizeMb);
 }
 
 template<class T>
 Expected<void> Resize::checkSpace(const T &mode) const
 {
-	return mode.checkSpace(m_image);
+	return mode.checkSpace(m_helper.getImage());
 }
 
 namespace Merge
@@ -1024,15 +950,16 @@ Expected<void> Resize::execute() const
 	if (convertMbToBytes(m_sizeMb) == snapshotChain.getList().last().getVirtualSize())
 		return Expected<void>();
 
+	ResizeHelper helper(snapshotChain.getList().last(), m_gfsMap, m_call);
+
 	Expected<Resizer::mode_type> mode = m_resizeLastPartition ?
-		Resizer::getModeConsider(snapshotChain.getList().last(), m_sizeMb) :
-		Resizer::getModeIgnore(snapshotChain.getList().last(), m_sizeMb);
+		Resizer::getModeConsider(helper, m_sizeMb) :
+		Resizer::getModeIgnore(helper, m_sizeMb);
+
 	if (!mode.isOk())
 		return mode;
 
-	return boost::apply_visitor(Visitor::Resize(
-				snapshotChain.getList().last(),
-				m_sizeMb, m_call, m_gfsAction), mode.get());
+	return boost::apply_visitor(Visitor::Resize(helper, m_sizeMb), mode.get());
 }
 
 ////////////////////////////////////////////////////////////
@@ -1047,7 +974,7 @@ Expected<void> ResizeInfo::execute() const
 	if (!result.isOk())
 		return result;
 	Image::Chain snapshotChain = result.get();
-	ResizeHelper resizer(snapshotChain.getList().last());
+	ResizeHelper resizer(snapshotChain.getList().last(), GuestFS::Map());
 	Expected<ResizeData> infoRes = resizer.getResizeData();
 	if (!infoRes.isOk())
 		return infoRes;
