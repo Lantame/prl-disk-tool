@@ -106,6 +106,28 @@ private:
 };
 
 ////////////////////////////////////////////////////////////
+// ResizeData
+
+struct ResizeData
+{
+	quint64 m_currentSize;
+	quint64 m_minSize;
+	quint64 m_minSizeKeepFS;
+	QString m_lastPartition;
+	bool m_fsSupported;
+	bool m_partitionSupported;
+
+	ResizeData(quint64 currentSize):
+		m_currentSize(currentSize), m_minSize(currentSize),
+		m_minSizeKeepFS(currentSize), m_fsSupported(true),
+		m_partitionSupported(true)
+	{
+	}
+
+	void print(const SizeUnitType &unitType) const;
+};
+
+////////////////////////////////////////////////////////////
 // ResizeInfo
 
 struct ResizeInfo: Default
@@ -116,6 +138,7 @@ struct ResizeInfo: Default
 	}
 
 	Expected<void> execute() const;
+	Expected<void> executePloop() const;
 
 private:
 	SizeUnitType m_unitType;
