@@ -29,6 +29,7 @@
 ///
 ///////////////////////////////////////////////////////////////////////////////
 #include <boost/make_shared.hpp>
+#include <errno.h>
 
 #include "GuestFSWrapper.h"
 #include "StringTable.h"
@@ -786,7 +787,16 @@ Expected<QString> Helper::getPartitionTable() const
 {
 	char *partTable = guestfs_part_get_parttype(m_g, GUESTFS_DEVICE);
 	if (!partTable)
+	{
+		int err = guestfs_last_errno(m_g);
+		// This should catch no-partition-table cases.
+		if (err == EINVAL)
+		{
+			return Expected<QString>::fromMessage(
+					"No partition table", ERR_NO_PARTITION_TABLE);
+		}
 		return Expected<QString>::fromMessage("Unable to get partition table type");
+	}
 
 	QString table(partTable);
 	free(partTable);

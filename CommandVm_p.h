@@ -173,6 +173,7 @@ namespace Ignore
 ////////////////////////////////////////////////////////////
 // Shrink
 
+template <typename T>
 struct Shrink
 {
 	Expected<void> execute(ResizeHelper& helper,  quint64 sizeMb) const;
@@ -240,7 +241,8 @@ private:
 };
 
 typedef boost::variant<
-	Ignore::Shrink,
+	Ignore::Shrink<void>,
+	Ignore::Shrink<VirtResize>,
 	Ignore::Expand,
 	Gpt<Ignore::Expand>,
 	Consider::Shrink,
