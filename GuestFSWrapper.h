@@ -90,7 +90,7 @@ struct Ext
 	}
 
 	int resize(quint64 newSize) const;
-	Expected<quint64> getMinSize(const struct statvfs &stats) const;
+	Expected<quint64> getMinSize() const;
 
 private:
 	guestfs_h *m_g;

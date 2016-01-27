@@ -129,8 +129,8 @@ namespace Visitor
 
 struct MinSize: boost::static_visitor<Expected<quint64> >
 {
-	MinSize(guestfs_h *g, const QString &name, const Helper &helper):
-		m_g(g), m_name(name), m_helper(helper)
+	MinSize(guestfs_h *g, const QString &name):
+		m_g(g), m_name(name)
 	{
 	}
 
@@ -140,35 +140,7 @@ struct MinSize: boost::static_visitor<Expected<quint64> >
 private:
 	guestfs_h *m_g;
 	QString m_name;
-	Helper m_helper;
 };
-
-template<> Expected<quint64> MinSize::operator() (const Ext &fs) const
-{
-	Q_UNUSED(fs);
-	Expected<struct statvfs> stats = m_helper.getFilesystemStats(m_name);
-	if (!stats.isOk())
-		return stats;
-	return Ext(m_g, m_name).getMinSize(stats.get());
-}
-
-template<> Expected<quint64> MinSize::operator() (const Ntfs &fs) const
-{
-	Q_UNUSED(fs);
-	return Ntfs(m_g, m_name).getMinSize();
-}
-
-template<> Expected<quint64> MinSize::operator() (const Btrfs &fs) const
-{
-	Q_UNUSED(fs);
-	return Btrfs(m_g, m_name).getMinSize();
-}
-
-template<> Expected<quint64> MinSize::operator() (const Xfs &fs) const
-{
-	Q_UNUSED(fs);
-	return Xfs(m_g, m_name).getMinSize();
-}
 
 template<> Expected<quint64> MinSize::operator() (const Swap &fs) const
 {
@@ -176,11 +148,17 @@ template<> Expected<quint64> MinSize::operator() (const Swap &fs) const
 	return Swap::getMinSize();
 }
 
-template<class T> Expected<quint64> MinSize::operator() (const T &fs) const
+template<> Expected<quint64> MinSize::operator() (const Unknown &fs) const
 {
 	Q_UNUSED(fs);
 	return Expected<quint64>::fromMessage(
-				QString(IDS_ERR_FS_UNSUPPORTED), ERR_UNSUPPORTED_FS);
+			QString(IDS_ERR_FS_UNSUPPORTED), ERR_UNSUPPORTED_FS);
+}
+
+template<class T> Expected<quint64> MinSize::operator() (const T &fs) const
+{
+	Q_UNUSED(fs);
+	return T(m_g, m_name).getMinSize();
 }
 
 ////////////////////////////////////////////////////////////
@@ -319,7 +297,7 @@ Expected<Stats> Unit::getStats() const
 
 Expected<quint64> Unit::getMinSize() const
 {
-	return boost::apply_visitor(Visitor::MinSize(m_g, m_name, m_helper), m_filesystem);
+	return boost::apply_visitor(Visitor::MinSize(m_g, m_name), m_filesystem);
 }
 
 Expected<struct statvfs> Unit::getFilesystemStats() const
@@ -594,27 +572,12 @@ int Ext::resize(quint64 newSize) const
 	return guestfs_resize2fs_size(m_g, QSTR2UTF8(m_partition), newSize);
 }
 
-Expected<quint64> Ext::getMinSize(const struct statvfs &stats) const
+Expected<quint64> Ext::getMinSize() const
 {
-#ifdef NEW_GUESTFS
-	qint64 ret = guestfs_vfs_minimum_size(m_partition);
+	qint64 ret = guestfs_vfs_minimum_size(m_g, QSTR2UTF8(m_partition));
 	if (ret < 0)
 		return Expected<quint64>::fromMessage(IDS_ERR_CANNOT_GET_MIN_SIZE, ret);
 	return ret;
-#else
-	char a1[] = "resize2fs", a2[] = "-P", a3[] = "-f";
-	QByteArray ba = m_partition.toUtf8();
-	char *cmd[] = {a1, a2, a3, ba.data(), NULL};
-	char *ret = guestfs_debug(m_g, "sh", cmd);
-	QString output(ret);
-	free(ret);
-
-	QRegExp sizeRE("Estimated minimum size of the filesystem:\\s+(\\d+)\\s*");
-	if (sizeRE.indexIn(output) == -1)
-		return Expected<quint64>::fromMessage(IDS_ERR_CANNOT_PARSE_MIN_SIZE);
-	quint64 blocks = sizeRE.cap(1).toULongLong();
-	return blocks * stats.f_frsize;
-#endif // NEW_GUESTFS
 }
 
 ////////////////////////////////////////////////////////////
@@ -634,37 +597,10 @@ int Ntfs::resize(quint64 newSize) const
 
 Expected<quint64> Ntfs::getMinSize() const
 {
-#ifdef NEW_GUESTFS
-	qint64 ret = guestfs_vfs_minimum_size(m_partition);
+	qint64 ret = guestfs_vfs_minimum_size(m_g, QSTR2UTF8(m_partition));
 	if (ret < 0)
 		return Expected<quint64>::fromMessage(IDS_ERR_CANNOT_GET_MIN_SIZE, ret);
 	return ret;
-#else
-	quint64 bytes;
-	char a1[] = "ntfsresize", a2[] = "--info", a3[] ="-f", a4[] = "|", a5[] = "tee";
-	QByteArray ba = m_partition.toUtf8();
-	char *cmd[] = {a1, a2, a3, ba.data(), a4, a5, NULL};
-	char *ret = guestfs_debug(m_g, "sh", cmd);
-	QString output(ret);
-	free(ret);
-
-	QRegExp sizeRE("You might resize at\\s+(\\d+)\\s+bytes");
-	if (sizeRE.indexIn(output) != -1)
-		bytes = sizeRE.cap(1).toULongLong();
-	else
-	{
-		QRegExp vSizeRE("Current volume size\\s*:\\s*(\\d+)\\s+bytes");
-		if (vSizeRE.indexIn(output) == -1)
-			return Expected<quint64>::fromMessage(IDS_ERR_CANNOT_PARSE_MIN_SIZE);
-		quint64 volumeSize = vSizeRE.cap(1).toULongLong();
-		QRegExp cSizeRE("Cluster size\\s*:\\s*(\\d+)\\s+bytes");
-		if (cSizeRE.indexIn(output) == -1)
-			return Expected<quint64>::fromMessage(IDS_ERR_CANNOT_PARSE_MIN_SIZE);
-		quint64 clusterSize = cSizeRE.cap(1).toULongLong();
-		bytes = ceilTo(volumeSize, clusterSize);
-	}
-	return bytes;
-#endif // NEW_GUESTFS
 }
 
 ////////////////////////////////////////////////////////////
@@ -685,53 +621,16 @@ int Btrfs::resize(quint64 newSize) const
 
 Expected<quint64> Btrfs::getMinSize() const
 {
-#ifdef NEW_GUESTFS
 	int result;
 	if ((result = guestfs_mount_ro(m_g, QSTR2UTF8(m_partition), "/")))
 		return Expected<quint64>::fromMessage(IDS_ERR_CANNOT_MOUNT, result);
 
-	qint64 ret = guestfs_vfs_minimum_size(m_partition);
+	qint64 ret = guestfs_vfs_minimum_size(m_g, QSTR2UTF8(m_partition));
 	guestfs_umount(m_g, "/");
 
 	if (ret < 0)
 		return Expected<quint64>::fromMessage(IDS_ERR_CANNOT_GET_MIN_SIZE, ret);
 	return ret;
-#else
-	quint64 bytes;
-#ifndef OLD_BTRFS_PROGS // btrfs-progs >= 4.2
-	int result;
-	if ((result = guestfs_mount_ro(m_g, QSTR2UTF8(m_partition), "/")))
-		return Expected<quint64>::fromMessage(IDS_ERR_CANNOT_MOUNT, result);
-
-	char a1[] = "btrfs", a2[] = "inspect-internal", a3[] = "min-dev-size", a4[] = "/sysroot/";
-	char *cmd[] = {a1, a2, a3, a4, NULL};
-	char *ret = guestfs_debug(m_g, "sh", cmd);
-	QString output(ret);
-	free(ret);
-
-	guestfs_umount(m_g, "/");
-
-	QRegExp sizeRE("^([\\d]+) bytes");
-	if (sizeRE.indexIn(output) != -1)
-		bytes = sizeRE.cap(1).toULongLong();
-	else
-		return Expected<quint64>::fromMessage(IDS_ERR_CANNOT_PARSE_MIN_SIZE);
-#else
-	char a1[] = "btrfs", a2[] = "filesystem", a3[] = "show";
-	QByteArray ba = partition.toUtf8();
-	char *cmd[] = {a1, a2, a3, ba.data(), NULL};
-	char *ret = guestfs_debug(m_g, "sh", cmd);
-	QString output(ret);
-	free(ret);
-
-	QRegExp sizeRE(QString("devid .* used ([\\d\\.]+)([KMGTP])iB path %1").arg(partition));
-	if (sizeRE.indexIn(output) != -1)
-		bytes = convertToBytes(sizeRE.cap(1), sizeRE.cap(2)[0]);
-	else
-		return Expected<quint64>::fromMessage(IDS_ERR_CANNOT_PARSE_MIN_SIZE);
-#endif // OLD_BTRFS_PROGS
-	return bytes;
-#endif // NEW_GUESTFS
 }
 
 ////////////////////////////////////////////////////////////
@@ -752,24 +651,11 @@ Expected<quint64> Xfs::getMinSize() const
 	int ret;
    	if ((ret = guestfs_mount_ro(m_g, QSTR2UTF8(m_partition), "/")))
 		return Expected<quint64>::fromMessage(IDS_ERR_CANNOT_MOUNT);
-#ifdef NEW_GUESTFS
-	qint64 bytes = guestfs_vfs_minimum_size(m_partition);
+	qint64 bytes = guestfs_vfs_minimum_size(m_g, QSTR2UTF8(m_partition));
 	guestfs_umount(m_g, "/");
 	if (bytes < 0)
 		return Expected<quint64>::fromMessage(IDS_ERR_CANNOT_GET_MIN_SIZE, bytes);
 	return bytes;;
-#else
-	// XFS does NOT support shrinking.
-	struct guestfs_xfsinfo *info = guestfs_xfs_info(m_g, "/");
-	guestfs_umount(m_g, "/");
-
-	if (NULL == info)
-		return Expected<quint64>::fromMessage("Unable to get filesystem info");
-
-	quint64 bytes = info->xfs_blocksize * info->xfs_datablocks;
-	free(info);
-	return bytes;
-#endif // NEW_GUESTFS
 }
 
 ////////////////////////////////////////////////////////////
@@ -948,35 +834,9 @@ Expected<void> Wrapper::expandGPT() const
 	if (!m_gfsAction)
 		return Expected<void>();
 
-#ifdef NEW_GUESTFS
 	int ret = guestfs_part_expand_gpt(m_g.get(), GUESTFS_DEVICE);
 	if (ret < 0)
 		return Expected<void>::fromMessage("Unable to move GPT backup header");
-#else
-	char a1[] = "sgdisk", a2[] = "-e", a3[] = "-v";
-	QByteArray device(GUESTFS_DEVICE);
-	char *cmd[] = {a1, a2, device.data(), NULL};
-	char *ret = guestfs_debug(m_g.get(), "sh", cmd);
-	QString output(ret);
-	free(ret);
-	// Hack. To make sure the operation completed successfully.
-	if (!output.contains("The operation has completed successfully."))
-	{
-		return Expected<void>::fromMessage(
-				QString("sgdisk error. it returned:\n%1").arg(output));
-	}
-
-	// verify correctness
-	cmd[1] = a3;
-	ret = guestfs_debug(m_g.get(), "sh", cmd);
-	output = ret;
-	free(ret);
-	if (!output.contains("No problems found."))
-	{
-		return Expected<void>::fromMessage(
-				QString("sgdisk error. it returned:\n%1").arg(output));
-	}
-#endif // NEW_GUESTFS
 	return Expected<void>();
 }
 
