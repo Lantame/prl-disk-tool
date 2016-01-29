@@ -47,32 +47,74 @@
 #include "Util.h"
 #include "Expected.h"
 #include "Abort.h"
+#include "Lvm.h"
 
 namespace GuestFS
 {
+namespace VG
+{
+
+////////////////////////////////////////////////////////////
+// Controller
+
+struct Controller
+{
+	explicit Controller(guestfs_h *g):
+		m_g(g)
+	{
+	}
+
+	Expected<QStringList> get() const;
+	Expected<Lvm::Config> getConfig(const QString &name) const;
+
+	Expected<void> activate() const;
+	Expected<void> deactivate() const;
+
+	Expected<quint64> getTotalFree() const;
+
+private:
+	guestfs_h *m_g;
+};
+
+} // namespace VG
 
 ////////////////////////////////////////////////////////////
 // Helper
 
 struct Helper
 {
-	explicit Helper(guestfs_h *g, bool readOnly):
-		m_g(g), m_readOnly(readOnly)
+	explicit Helper(guestfs_h *g):
+		m_g(g), m_vg(g)
 	{
-	}
-
-	bool isReadOnly() const
-	{
-		return m_readOnly;
 	}
 
 	/* 'msdos' or 'gpt' */
 	Expected<QString> getPartitionTable() const;
 	Expected<struct statvfs> getFilesystemStats(const QString &name) const;
 
+	const VG::Controller& getVG() const
+	{
+		return m_vg;
+	}
+
+	Expected<quint64> getSectorSize() const;
+	Expected<quint64> getSize64(const QString &device) const;
+
 private:
 	guestfs_h *m_g;
-	bool m_readOnly;
+	VG::Controller m_vg;
+};
+
+////////////////////////////////////////////////////////////
+// Action
+
+struct Action
+{
+	template <typename FS>
+	static FS get(guestfs_h *g, const QString &partition)
+	{
+		return FS(g, partition);
+	}
 };
 
 ////////////////////////////////////////////////////////////
@@ -179,26 +221,92 @@ struct Unknown
 {
 };
 
+namespace Partition
+{
+struct Unit;
+}
+
+namespace Volume
+{
+
+////////////////////////////////////////////////////////////
+// Logical
+
+struct Logical
+{
+	Logical(guestfs_h *g, const QString &fullName,
+			const boost::optional<Action> &gfsAction):
+		m_g(g), m_fullName(fullName), m_gfsAction(gfsAction)
+	{
+	}
+
+	static QString getName(const Lvm::Group &group, const Lvm::Segment &segment);
+
+	Expected<quint64> getSize() const;
+	Expected<quint64> getMinSize() const;
+
+	Expected<Partition::Unit> createUnit() const;
+	Expected<void> resize(quint64 newSize) const;
+
+private:
+	guestfs_h *m_g;
+	QString m_fullName;
+	boost::optional<Action> m_gfsAction;
+};
+
+////////////////////////////////////////////////////////////
+// Physical
+
+struct Physical
+{
+	explicit Physical(const Lvm::Physical &physical):
+		m_physical(physical)
+	{
+	}
+
+	Physical(const Lvm::Physical &physical, guestfs_h *g, const QString &partition,
+	         const boost::optional<Action> &gfsAction):
+		m_physical(physical), m_g(g), m_partition(partition),
+		m_gfsAction(gfsAction)
+	{
+	}
+
+	const Lvm::Physical& getPhysical() const
+	{
+		return m_physical;
+	}
+
+	Expected<quint64> getMinSize() const;
+	Expected<void> resize(quint64 newSize) const;
+
+	template <class T>
+	Expected<qint64> getLVDelta(quint64 newSize, const Lvm::Segment &segment,
+								const T& mode) const;
+	Expected<void> pvresize(quint64 newSize) const;
+
+private:
+	Expected<quint64> getSize() const;
+
+	Expected<qint64> calculateLVDelta(
+			quint64 newSize, const Lvm::Segment &segment) const;
+
+	Lvm::Physical m_physical;
+	guestfs_h *m_g;
+	QString m_partition;
+	boost::optional<Action> m_gfsAction;
+};
+
+} // namespace Volume
+
 typedef boost::variant<
 	Unknown,
 	Ext,
 	Ntfs,
 	Btrfs,
 	Xfs,
-	Swap
+	Swap,
+	Volume::Physical
 > fs_type;
-
-////////////////////////////////////////////////////////////
-// Action
-
-struct Action
-{
-	template <typename FS>
-	static FS get(guestfs_h *g, const QString &partition)
-	{
-		return FS(g, partition);
-	}
-};
 
 namespace Partition
 {
@@ -297,10 +405,9 @@ private:
 
 struct Unit
 {
-	Unit(guestfs_h *g, const GuestFS::Helper &helper,
-		 const boost::optional<GuestFS::Action> &gfsAction,
-		 const QString &name, const GuestFS::fs_type &filesystem = GuestFS::Unknown()):
-		m_g(g),  m_helper(helper), m_gfsAction(gfsAction),
+	Unit(guestfs_h *g, const boost::optional<Action> &gfsAction,
+		 const QString &name, const fs_type &filesystem = Unknown()):
+		m_g(g),  m_helper(g), m_gfsAction(gfsAction),
 		m_name(name), m_filesystem(filesystem)
 	{
 	}
@@ -318,8 +425,12 @@ struct Unit
 	Expected<Partition::Stats> getStats() const;
 
 	Expected<quint64> getMinSize() const;
+	Expected<quint64> getSize() const;
 
-	template <class T> const T* getFilesystem() const;
+	template <class T> const T* getFilesystem() const
+	{
+		return boost::get<T>(&m_filesystem);
+	}
 
 	const GuestFS::fs_type& getFilesystem() const
 	{
@@ -327,10 +438,10 @@ struct Unit
 	}
 
 	/* Disk-modifying */
-	Expected<void> shrinkFilesystem(quint64 dec) const;
+	Expected<void> shrinkContent(quint64 dec) const;
 
 	/* Disk-modifying */
-	Expected<void> resizeFilesystem(quint64 newSize) const;
+	Expected<void> resizeContent(quint64 newSize) const;
 
 	Expected<bool> isFilesystemSupported() const;
 
@@ -342,16 +453,16 @@ struct Unit
 	Expected<void> apply(const Attribute::Aggregate &attrs) const;
 
 private:
-	Expected<quint64> getMinSize(const GuestFS::fs_type &fs) const;
+	Expected<quint64> getMinSize(const fs_type &fs) const;
 
 	template<class T> Expected<T> getAttributesInternal() const;
 
 private:
 	guestfs_h *m_g;
-	GuestFS::Helper m_helper;
-	boost::optional<GuestFS::Action> m_gfsAction;
+	Helper m_helper;
+	boost::optional<Action> m_gfsAction;
 	QString m_name;
-	GuestFS::fs_type m_filesystem;
+	fs_type m_filesystem;
 };
 
 ////////////////////////////////////////////////////////////
@@ -359,9 +470,10 @@ private:
 
 struct List
 {
-	List(guestfs_h *g, const GuestFS::Helper &helper,
-		 const boost::optional<GuestFS::Action> &gfsAction):
-		m_g(g), m_helper(helper), m_gfsAction(gfsAction)
+	typedef QMap<QString, fs_type> fsMap_type;
+
+	List(guestfs_h *g, const boost::optional<Action> &gfsAction):
+		m_g(g), m_gfsAction(gfsAction)
 	{
 	}
 
@@ -370,15 +482,19 @@ struct List
 	Expected<int> getCount() const;
 	Expected<QList<Unit> > get() const;
 
+	Expected<Unit> createUnit(const QString &name) const;
+
+	Expected<fsMap_type> getFilesystems() const;
+
 private:
 	Expected<void> load() const;
-	Expected<QMap<QString, GuestFS::fs_type> > getFilesystems() const;
+	Expected<fsMap_type> getContent() const;
 
 	guestfs_h *m_g;
-	GuestFS::Helper m_helper;
-	boost::optional<GuestFS::Action> m_gfsAction;
+	boost::optional<Action> m_gfsAction;
 	// Lazy-initialized cache.
-	mutable boost::shared_ptr<QList<Unit> > m_partitions;
+	mutable boost::optional<QList<Unit> > m_partitions;
+	mutable boost::optional<fsMap_type> m_content;
 };
 
 } // namespace Partition
@@ -403,7 +519,7 @@ struct Wrapper
 
 	Expected<Partition::Unit> getLastPartition() const
 	{
-		return m_partList.getLast();
+		return m_partList->getLast();
 	}
 
 	/* Return extended partition (at most 1 possible).
@@ -419,7 +535,12 @@ struct Wrapper
 
 	Expected<QList<Partition::Unit> > getPartitions() const
 	{
-		return m_partList.get();
+		return m_partList->get();
+	}
+
+	const Partition::List& getPartitionList() const
+	{
+		return *m_partList;
 	}
 
 	Expected<quint64> getBlockSize() const;
@@ -441,7 +562,27 @@ struct Wrapper
 	Expected<void> resizePartition(const Partition::Unit &partition,
 	                               quint64 startSector, quint64 endSector) const;
 
-	Expected<quint64> getSectorSize() const;
+	Expected<quint64> getSectorSize() const
+	{
+		return m_helper.getSectorSize();
+	}
+
+	Expected<void> activateVGs() const
+	{
+		return m_helper.getVG().activate();
+	}
+
+	Expected<void> deactivateVGs() const
+	{
+		return m_helper.getVG().deactivate();
+	}
+
+	Expected<quint64> getVGTotalFree() const
+	{
+		return m_helper.getVG().getTotalFree();
+	}
+
+	Expected<void> sync() const;
 
 private:
 	struct HandleDestroyer
@@ -459,8 +600,8 @@ private:
 	Wrapper(const boost::shared_ptr<guestfs_h> &g,
 			const boost::optional<Action> &gfsAction,
 			bool readOnly):
-		m_g(g), m_gfsAction(gfsAction), m_helper(g.get(), readOnly),
-		m_partList(g.get(), m_helper, m_gfsAction), m_readOnly(readOnly)
+		m_g(g), m_gfsAction(gfsAction), m_helper(g.get()),
+		m_partList(new Partition::List(g.get(), m_gfsAction)), m_readOnly(readOnly)
 	{
 	}
 
@@ -471,7 +612,7 @@ private:
 	boost::shared_ptr<guestfs_h> m_g;
 	boost::optional<Action> m_gfsAction;
 	Helper m_helper;
-	Partition::List m_partList;
+	boost::shared_ptr<Partition::List> m_partList;
 	bool m_readOnly;
 };
 

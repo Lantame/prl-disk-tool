@@ -15,7 +15,8 @@ HEADERS += GuestFSWrapper.h \
            Expected.h \
            ProgramOptions.h \
            StringTable.h \
-           Errors.h
+           Errors.h \
+           Lvm.h
 
 SOURCES += main.cpp \
            GuestFSWrapper.cpp \
@@ -27,7 +28,8 @@ SOURCES += main.cpp \
            Util.cpp \
            Abort.cpp \
            ProgramOptions.cpp \
-           StringTable.cpp
+           StringTable.cpp \
+           Lvm.cpp
 
 
 target.path = /usr/sbin/
@@ -39,3 +41,7 @@ link.commands = $(SYMLINK) $$TARGET $(INSTALL_ROOT)$${target.path}$$LINKNAME
 link.uninstall = -$(DEL_FILE) $${target.path}$$LINKNAME
 link.path = /usr/sbin
 INSTALLS += link
+
+parser.files = lvm_parser.py
+parser.path = /usr/share/prl-disk-tool
+INSTALLS += parser

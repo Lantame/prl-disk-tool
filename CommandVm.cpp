@@ -61,6 +61,7 @@ const char TMP_IMAGE_EXT[] = ".tmp";
 // Numeric constants
 enum {SECTOR_SIZE = 512};
 enum {GPT_DEFAULT_END_SECTS = 127}; // guestfs somehow uses this value.
+enum {SWAP_HEADER_SIZE = 4096}; // for compact -i estimates
 
 // Functions
 
@@ -352,7 +353,7 @@ Expected<void> ResizeHelper::shrinkFSIfNeeded(quint64 mb)
 	{
 		// Shrinking empty space is not enough.
 		// We have to resize filesystem ourselves.
-		return lastPartition.get().shrinkFilesystem(-fsDelta.get());
+		return lastPartition.get().shrinkContent(-fsDelta.get());
 	}
 	return Expected<void>();
 }
@@ -395,6 +396,12 @@ Expected<void> ResizeHelper::expandToFit(quint64 mb, const Wrapper &gfs)
 	if (!lastPartition.isOk())
 		return lastPartition;
 
+	if (lastPartition.get().getFilesystem<Volume::Physical>() != NULL)
+	{
+		if (!(res = gfs.deactivateVGs()).isOk())
+			return res;
+	}
+
 	Expected<bool> logical = lastPartition.get().isLogical();
 	if (!logical.isOk())
 		return logical;
@@ -417,7 +424,13 @@ Expected<void> ResizeHelper::expandToFit(quint64 mb, const Wrapper &gfs)
 				      partTable.get(), gfs)).isOk())
 		return stats;
 
-	if (!(res = lastPartition.get().resizeFilesystem(stats.get().size)).isOk())
+	if (lastPartition.get().getFilesystem<Volume::Physical>() != NULL)
+	{
+		if (!(res = gfs.activateVGs()).isOk())
+			return res;
+	}
+
+	if (!(res = lastPartition.get().resizeContent(stats.get().size)).isOk())
 		return res;
 
 	return Expected<void>();
@@ -562,7 +575,7 @@ template<> Expected<void> ResizeHelper::resizeContent(
 template <class T> Expected<void> ResizeHelper::resizeContent(
 		const T& partition, qint64 delta)
 {
-	return partition.unit.shrinkFilesystem(-delta);
+	return partition.unit.shrinkContent(-delta);
 }
 
 template <class T>
@@ -857,6 +870,12 @@ Expected<void> Consider::Shrink::execute(ResizeHelper& helper, quint64 sizeMb) c
 	Expected<void> res;
 	if (!(res = helper.shrinkContent(sizeMb, resize)).isOk())
 		return res;
+	// We are going to execute virt-resize while handle is opered.
+	Expected<Wrapper> gfs = helper.getGFSWritable();
+	if (!gfs.isOk())
+		return gfs;
+	if (!(res = gfs.get().sync()).isOk())
+		return res;
 	if (!(res = resize(image.getFilename(), tmpPath.get())).isOk())
 		return res;
 	adapter.rename(tmpPath.get(), image.getFilename());
@@ -890,7 +909,7 @@ Expected<void> Consider::Expand::execute(ResizeHelper& helper, quint64 sizeMb) c
 		return tmpPath;
 	BOOST_SCOPE_EXIT(&tmpPath)
 	{
-		QFile::remove(tmpPath.get());
+		CallAdapter(Call()).remove(tmpPath.get());
 	} BOOST_SCOPE_EXIT_END
 
 	Expected<void> res;
@@ -1170,34 +1189,61 @@ Expected<void> CompactInfo::execute() const
 		return result;
 	Image::Chain snapshotChain = result.get();
 
-	quint64 blockSize, size, allocated, used;
+	Expected<Wrapper> gfsRes = Wrapper::createReadOnly(
+			snapshotChain.getList().last().getFilename());
+	if (!gfsRes.isOk())
+		return gfsRes;
+	const Wrapper& gfs = gfsRes.get();
+
+	Expected<quint64> bsizeRes = gfs.getBlockSize();
+	if (!bsizeRes.isOk())
+		return bsizeRes;
+	quint64 blockSize = bsizeRes.get();
+
+	// Something possibly mountable.
+	Expected<QMap<QString, fs_type> > filesystems =
+		gfs.getPartitionList().getFilesystems();
+	if (!filesystems.isOk())
+		return filesystems;
+	quint64 free = 0;
+	Q_FOREACH(const QString& device, filesystems.get().keys())
 	{
-		// GuestFS handle wrapper.
-		Expected<Wrapper> gfsRes = Wrapper::createReadOnly(
-				snapshotChain.getList().last().getFilename());
-		if (!gfsRes.isOk())
-			return gfsRes;
-		const Wrapper& gfs = gfsRes.get();
-		Expected<QList<Partition::Unit> > partitions = gfs.getPartitions();
-		if (!partitions.isOk())
-			return partitions;
-		quint64 free = 0;
-		Q_FOREACH(const Partition::Unit& part, partitions.get())
+		Expected<Partition::Unit> unit = gfs.getPartitionList().createUnit(device);
+		if (!unit.isOk())
+			return unit;
+		if (unit.get().getFilesystem<Unknown>() != NULL)
+			continue;
+		quint64 deviceFree;
+		if (unit.get().getFilesystem<Swap>() != NULL)
 		{
-			Expected<struct statvfs> stats = part.getFilesystemStats();
+			Expected<quint64> devSize = unit.get().getSize();
+			if (!devSize.isOk())
+				return devSize;
+			deviceFree = devSize.get() - SWAP_HEADER_SIZE;
+		}
+		else
+		{
+			Expected<struct statvfs> stats = unit.get().getFilesystemStats();
 			if (!stats.isOk())
 				return stats;
-			free += stats.get().f_bfree * stats.get().f_frsize;
+			deviceFree = stats.get().f_bfree * stats.get().f_frsize;
 		}
-		size = snapshotChain.getList().last().getVirtualSize();
-		// Approximate: qemu-img does not provide a way to get allocated block count.
-		allocated = snapshotChain.getList().last().getActualSize();
-		used = size - free;
-		Expected<quint64> bsizeRes = gfs.getBlockSize();
-		if (!bsizeRes.isOk())
-			return bsizeRes;
-		blockSize = bsizeRes.get();
+		Logger::info(QString("%1: %2 (%3)")
+					 .arg(device)
+					 .arg(deviceFree)
+					 .arg(deviceFree / blockSize));
+		free += deviceFree;
 	}
+	Expected<quint64> vgFree = gfs.getVGTotalFree();
+	if (!vgFree.isOk())
+		return vgFree;
+	Logger::info(QString("VGs: %1 (%2)")
+			.arg(vgFree.get()).arg(vgFree.get() / blockSize));
+	free += vgFree.get();
+	quint64 size = snapshotChain.getList().last().getVirtualSize();
+	// Approximate: qemu-img does not provide a way to get allocated block count.
+	quint64 allocated = snapshotChain.getList().last().getActualSize();
+	quint64 used = size - free;
 
 	Logger::print(QString("%1%2").arg(IDS_DISK_INFO__BLOCK_SIZE).arg(blockSize / SECTOR_SIZE, 15));
 	Logger::print(QString("%1%2").arg(IDS_DISK_INFO__BLOCKS_TOTAL).arg(size / blockSize, 15));
