@@ -229,7 +229,6 @@ private:
 
 template<> Expected<void> Resize::operator() (const Volume::Physical &fs) const
 {
-	Logger::info(QString("resizing content of PV %1").arg(m_name));
 	return Volume::Physical(fs.getPhysical(), m_g, m_name, m_gfsAction).resize(m_newSize);
 }
 
@@ -241,7 +240,7 @@ template<> Expected<int> Resize::execute<Ext>() const
 
 template<> Expected<int> Resize::execute<Ntfs>() const
 {
-	Logger::info(QString("resize2fs %1 %2").arg(m_name).arg(m_newSize));
+	Logger::info(QString("ntfsresize -f %1 --size %2").arg(m_name).arg(m_newSize));
 	return (bool)m_gfsAction ? m_gfsAction->get<Ntfs>(m_g, m_name).resize(m_newSize) : 0;
 }
 
@@ -1038,6 +1037,14 @@ Expected<quint64> Physical::getMinSize() const
 
 Expected<void> Physical::resize(quint64 newSize) const
 {
+	Expected<quint64> pvSize = getSize();
+	if (!pvSize.isOk())
+		return pvSize;
+	Logger::info(QString("Resizing PV %1 from %2 to %3")
+	             .arg(m_partition).arg(pvSize.get()).arg(newSize));
+	if (pvSize.get() == newSize)
+		return Expected<void>();
+
 	const Lvm::Group& group = m_physical.getGroup();
 	if (!group.isResizeable() || !group.isWriteable())
 	{
@@ -1052,9 +1059,6 @@ Expected<void> Physical::resize(quint64 newSize) const
 		return pvresize(newSize);
 	}
 
-	Expected<quint64> pvSize = getSize();
-	if (!pvSize.isOk())
-		return pvSize;
 	Mode::mode_type mode = Mode::get(newSize, pvSize.get());
 
 	Expected<qint64> lvDeltaRes = boost::apply_visitor(
