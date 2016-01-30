@@ -569,6 +569,17 @@ template<> Expected<void> ResizeHelper::resizeContent(
 	// If end + ctDelta == N * sectorSize - 1 (last byte of sector) -> endSector = N - 1
 	// Else	                                                        -> endSector = N - 2
 	quint64 endSector = (logicalStats.get().end + contentDelta + 1) / sectorSize.get() - 1;
+
+	if (partition.lastChild.getFilesystem<Volume::Physical>() != NULL)
+	{
+		if (!(res = gfs.get().deactivateVGs()).isOk())
+			return res;
+		if (!(res = gfs.get().resizePartition(partition.lastChild, startSector, endSector)).isOk())
+			return res;
+		if (!(res = gfs.get().activateVGs()).isOk())
+			return res;
+		return Expected<void>();
+	}
 	return gfs.get().resizePartition(partition.lastChild, startSector, endSector);
 }
 
