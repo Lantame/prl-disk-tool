@@ -756,7 +756,11 @@ int Ntfs::resize(quint64 newSize) const
 			GUESTFS_NTFSRESIZE_OPTS_FORCE, 1,
 			-1);
 	if (ret)
+	{
+		Logger::error("NTFS resize failed. Probably the filesystem was not unmounted cleanly.\n\
+		               Please try to reboot Windows and/or run CHKDSK /F.");
 		return ret;
+	}
 	return guestfs_ntfsfix(m_g, QSTR2UTF8(m_partition), -1);
 }
 
@@ -1076,8 +1080,6 @@ Expected<void> Physical::resize(quint64 newSize) const
 
 	QString lvName = Logical::getName(group, *lastSegment);
 	Logical logical(m_g, lvName, m_gfsAction);
-	Logger::info(QString("resizing PV from %1 to %2")
-	             .arg(pvSize.get()).arg(newSize));
 	return boost::apply_visitor(
 			Visitor::ResizePV(*this, newSize, lvDelta, logical), mode);
 }
