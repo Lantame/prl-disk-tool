@@ -29,6 +29,7 @@
 ///
 ///////////////////////////////////////////////////////////////////////////////
 #include <cstdio>
+#include <signal.h>
 
 #include <QProcess>
 
@@ -43,12 +44,26 @@ bool Logger::s_verbose = false;
 namespace
 {
 enum {CMD_WORK_STEPS = 60 * 60, CMD_WORK_STEP_TIME = 1000};
+
+class IndependentProcess: public QProcess
+{
+protected:
+	void setupChildProcess()
+	{
+		setpgid(0, 0);
+
+		sigset_t a;
+		sigemptyset(&a);
+		sigprocmask(SIG_SETMASK, &a, NULL);
+	}
+};
+
 }
 
 
 int run_prg(const char *name, const QStringList &lstArgs, QByteArray *out, QByteArray *err, const Abort::token_type &token)
 {
-	QProcess proc;
+	IndependentProcess proc;
 	proc.start(name, lstArgs);
 
 	int step;
