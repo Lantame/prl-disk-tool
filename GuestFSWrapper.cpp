@@ -768,7 +768,12 @@ Expected<quint64> Ntfs::getMinSize() const
 {
 	qint64 ret = guestfs_vfs_minimum_size(m_g, QSTR2UTF8(m_partition));
 	if (ret < 0)
+	{
+		Logger::error("Failed to get NTFS minimum size.\n\
+		               Probably the filesystem was not unmounted cleanly.\n\
+		               Please try to reboot Windows and/or run CHKDSK /F.");
 		return Expected<quint64>::fromMessage(IDS_ERR_CANNOT_GET_MIN_SIZE, ret);
+	}
 	return ret;
 }
 
