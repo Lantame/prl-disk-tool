@@ -116,11 +116,12 @@ struct ResizeData
 	QString m_lastPartition;
 	bool m_fsSupported;
 	bool m_partitionSupported;
+	bool m_dirty;
 
 	ResizeData(quint64 currentSize):
 		m_currentSize(currentSize), m_minSize(currentSize),
 		m_minSizeKeepFS(currentSize), m_fsSupported(true),
-		m_partitionSupported(true)
+		m_partitionSupported(true), m_dirty(false)
 	{
 	}
 

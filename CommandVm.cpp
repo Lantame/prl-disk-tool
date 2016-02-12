@@ -237,10 +237,12 @@ void ResizeData::print(const SizeUnitType &unitType) const
 	QString warnings;
 	if (!m_partitionSupported)
 		warnings.append("Unsupported partition\n");
-	else if (m_lastPartition.isEmpty())
+	if (m_lastPartition.isEmpty())
 		warnings.append("No partitions found\n");
-	else if (!m_fsSupported)
+	if (!m_fsSupported)
 		warnings.append(IDS_DISK_INFO__RESIZE_WARN_FS_NOTSUPP).append("\n");
+	if (m_dirty)
+		warnings.append("Filesystem is dirty. The estimates may be inaccurate\n");
 
 	/// Output to console
 	Logger::print(IDS_DISK_INFO__HEAD);
@@ -296,22 +298,36 @@ Expected<ResizeData> ResizeHelper::getResizeData()
 	// We always shrink using virt-resize, so overhead is present.
 	info.m_minSizeKeepFS = usedSpace + overhead.get();
 
-	Expected<quint64> partMinSize = lastPartition.get().getMinSize();
-	if (!partMinSize.isOk())
+	Expected<quint64> partMinSizeRes = lastPartition.get().getMinSize();
+	quint64 partMinSize;
+	if (!partMinSizeRes.isOk())
 	{
-		if (partMinSize.getCode() != ERR_UNSUPPORTED_FS)
-			return partMinSize;
-
-		info.m_fsSupported = false;
-		info.m_minSize = info.m_currentSize - tail + overhead.get();
+		if (partMinSizeRes.getCode() == ERR_UNSUPPORTED_FS)
+		{
+			info.m_fsSupported = false;
+			info.m_minSize = info.m_currentSize - tail + overhead.get();
+			return info;
+		}
+		else if (lastPartition.get().getFilesystem<Ntfs>() != NULL)
+		{
+			// Ntfs may be inconsistent (e.g. on running VM). Best efforts.
+			Expected<struct statvfs> stat = lastPartition.get().getFilesystemStats();
+			if (!stat.isOk())
+				return stat;
+			info.m_dirty = true;
+			partMinSize = (stat.get().f_blocks - stat.get().f_bfree) *
+						   stat.get().f_frsize;
+		}
+		else
+			return partMinSizeRes;
 	}
 	else
-	{
-		Logger::info(QString("Minimum size: %1").arg(partMinSize.get()));
-		// total_space - space_after_start_of_last_partition + min_space_needed_for_partition_and_resize
-		info.m_minSize = info.m_currentSize - (stats.get().size + tail) +
-						 partMinSize.get() + overhead.get();
-	}
+		partMinSize = partMinSizeRes.get();
+
+	Logger::info(QString("Minimum size: %1").arg(partMinSize));
+	// total_space - space_after_start_of_last_partition + min_space_needed_for_partition_and_resize
+	info.m_minSize = info.m_currentSize - (stats.get().size + tail) +
+					 partMinSize + overhead.get();
 	return info;
 }
 
