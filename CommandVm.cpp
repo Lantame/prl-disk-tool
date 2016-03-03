@@ -62,6 +62,7 @@ const char TMP_IMAGE_EXT[] = ".tmp";
 enum {SECTOR_SIZE = 512};
 enum {GPT_DEFAULT_END_SECTS = 127}; // guestfs somehow uses this value.
 enum {SWAP_HEADER_SIZE = 4096}; // for compact -i estimates
+enum {VIRT_RESIZE_COPY_SPEED = 10}; // MB/s
 
 // Functions
 
@@ -670,10 +671,12 @@ VirtResize& VirtResize::resizeForce(const QString &partition, quint64 size)
 	return *this;
 }
 
-Expected<void> VirtResize::operator() (const QString &src, const QString &dst)
+Expected<void> VirtResize::operator() (
+		const QString &src, const QString &dst, quint64 sizeMb)
 {
 	m_args << "--machine-readable" << "--ntfsresize-force" << src << dst;
-	int ret = m_adapter.run(VIRT_RESIZE, m_args);
+	int ret = m_adapter.run(VIRT_RESIZE, m_args, NULL, NULL,
+	                        calculateTimeout(sizeMb));
 	Expected<void> res;
 	if (ret)
 	{
@@ -682,6 +685,13 @@ Expected<void> VirtResize::operator() (const QString &src, const QString &dst)
 	}
 	m_args.clear();
 	return res;
+}
+
+unsigned VirtResize::calculateTimeout(quint64 sizeMb)
+{
+	// Will it survive until overflow will be possible?
+	return qMin((quint64) UINT_MAX,
+	            qMax(sizeMb / VIRT_RESIZE_COPY_SPEED, (quint64) CMD_WORK_TIMEOUT));
 }
 
 namespace Resizer
@@ -792,7 +802,7 @@ Expected<void> Shrink<VirtResize>::execute(
 	} BOOST_SCOPE_EXIT_END
 
 	Expected<void> res;
-	if (!(res = VirtResize(adapter)(image.getFilename(), tmpPath.get())).isOk())
+	if (!(res = VirtResize(adapter)(image.getFilename(), tmpPath.get(), sizeMb)).isOk())
 		return res;
 	adapter.rename(tmpPath.get(), image.getFilename());
 	return res;
@@ -903,7 +913,7 @@ Expected<void> Consider::Shrink::execute(ResizeHelper& helper, quint64 sizeMb) c
 		return gfs;
 	if (!(res = gfs.get().sync()).isOk())
 		return res;
-	if (!(res = resize(image.getFilename(), tmpPath.get())).isOk())
+	if (!(res = resize(image.getFilename(), tmpPath.get(), sizeMb)).isOk())
 		return res;
 	adapter.rename(tmpPath.get(), image.getFilename());
 	return res;

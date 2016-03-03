@@ -53,9 +53,11 @@ struct VirtResize
 	VirtResize& shrink(const QString &partition);
 	VirtResize& resizeForce(const QString &partition, quint64 size);
 
-	Expected<void> operator() (const QString &src, const QString &dst);
+	Expected<void> operator() (const QString &src, const QString &dst, quint64 sizeMb);
 
 private:
+	static unsigned calculateTimeout(quint64 sizeMb);
+
 	QStringList m_args;
 	CallAdapter m_adapter;
 };
