@@ -345,7 +345,7 @@ Expected<QString> ResizeHelper::createTmpImage(quint64 mb, const QString &backin
 	QString tmpPath = getTmpImagePath(m_image.getFilename());
 	args << tmpPath << QString("%1M").arg(mb);
 	// Always create image.
-	int ret = CallAdapter(Call()).run(QEMU_IMG, args, NULL, NULL);
+	int ret = CallAdapter(Call()).run(QEMU_IMG, args);
 	if (ret)
 	{
 		return Expected<QString>::fromMessage(QString(IDS_ERR_SUBPROGRAM_RETURN_CODE)
@@ -673,7 +673,7 @@ VirtResize& VirtResize::resizeForce(const QString &partition, quint64 size)
 Expected<void> VirtResize::operator() (const QString &src, const QString &dst)
 {
 	m_args << "--machine-readable" << "--ntfsresize-force" << src << dst;
-	int ret = m_adapter.run(VIRT_RESIZE, m_args, NULL, NULL);
+	int ret = m_adapter.run(VIRT_RESIZE, m_args);
 	Expected<void> res;
 	if (ret)
 	{
@@ -837,7 +837,7 @@ Expected<void> Ignore::Expand::execute(ResizeHelper& helper, quint64 sizeMb) con
 	QStringList args;
 	// This is performed in-place.
 	args << "resize" << helper.getImage().getFilename() << QString("%1M").arg(sizeMb);
-	int ret = adapter.run(QEMU_IMG, args, NULL, NULL);
+	int ret = adapter.run(QEMU_IMG, args);
 	if (ret)
 	{
 		return Expected<void>::fromMessage(QString(IDS_ERR_SUBPROGRAM_RETURN_CODE)
@@ -1194,7 +1194,7 @@ Expected<void> Compact::execute() const
 	CallAdapter adapter(m_call);
 	QStringList args;
 	args << "--machine-readable" << "--in-place" << getDiskPath();
-	int ret = adapter.run(VIRT_SPARSIFY, args, NULL, NULL);
+	int ret = adapter.run(VIRT_SPARSIFY, args);
 	if (ret)
 	{
 		return Expected<void>::fromMessage(QString(IDS_ERR_SUBPROGRAM_RETURN_CODE)
@@ -1308,7 +1308,7 @@ Expected<void> Direct::doCommit(const QList<Image::Info> &chain) const
 	int ret;
 	QStringList args;
 	args << "commit" << "-b" << chain.first().getFilename() << chain.last().getFilename();
-	ret = m_adapter.run(QEMU_IMG, args, NULL, NULL);
+	ret = m_adapter.run(QEMU_IMG, args);
 	if (ret)
 	{
 		return Expected<void>::fromMessage(QString(IDS_ERR_SUBPROGRAM_RETURN_CODE)
@@ -1338,7 +1338,7 @@ Expected<void> Sequential::doCommit(const QList<Image::Info> &chain) const
 	for (int i = chain.length() - 1; i > 0; --i)
 	{
 		args << chain[i].getFilename();
-		ret = m_adapter.run(QEMU_IMG, args, NULL, NULL);
+		ret = m_adapter.run(QEMU_IMG, args);
 		if (ret)
 		{
 			return Expected<void>::fromMessage(QString(IDS_ERR_SUBPROGRAM_RETURN_CODE)
@@ -1421,7 +1421,7 @@ MergeSnapshots::getExternalMode(const boost::optional<Call> &call)
 	QByteArray out;
 	QStringList args;
 	args << "--help";
-	int ret = run_prg(QEMU_IMG, args, &out, NULL);
+	int ret = run_prg(QEMU_IMG, args, &out);
 	if (ret)
 	{
 		return Expected<mode_type>::fromMessage(QString(IDS_ERR_SUBPROGRAM_RETURN_CODE)

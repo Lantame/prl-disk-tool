@@ -160,7 +160,7 @@ Expected<Chain> Unit::getChain() const
 	QStringList args;
 	args << "info" << "--backing-chain" << "--output=json" << m_diskPath;
 	QByteArray out;
-	if (run_prg(QEMU_IMG, args, &out, NULL))
+	if (run_prg(QEMU_IMG, args, &out))
 		return Expected<Chain>::fromMessage("Snapshot chain is unavailable");
 
 	QString dirPath = QFileInfo(m_diskPath).absolutePath();
@@ -184,7 +184,7 @@ Expected<QStringList> Unit::getSnapshots() const
 	args << "snapshot" << "-l" << m_diskPath;
 	QByteArray out;
 	int ret;
-	if ((ret = run_prg(QEMU_IMG, args, &out, NULL)))
+	if ((ret = run_prg(QEMU_IMG, args, &out)))
 	{
 		return Expected<QStringList>::fromMessage(
 				QString(IDS_ERR_SUBPROGRAM_RETURN_CODE)
@@ -219,7 +219,7 @@ Expected<QString> Unit::createSnapshot(const CallAdapter &adapter) const
 	QStringList args;
 	args << "snapshot" << "-c" << "" << m_diskPath;
 	int ret;
-	if ((ret = adapter.run(QEMU_IMG, args, NULL, NULL)))
+	if ((ret = adapter.run(QEMU_IMG, args)))
 	{
 		return Expected<QString>::fromMessage(QString(IDS_ERR_SUBPROGRAM_RETURN_CODE)
 										      .arg(QEMU_IMG).arg(args.join(" ")).arg(ret));
@@ -242,7 +242,7 @@ Expected<void> Unit::applySnapshot(const QString &id, const CallAdapter &adapter
 	QStringList args;
 	args << "snapshot" << "-a" << id << m_diskPath;
 	int ret;
-	if ((ret = adapter.run(QEMU_IMG, args, NULL, NULL)))
+	if ((ret = adapter.run(QEMU_IMG, args)))
 	{
 		return Expected<void>::fromMessage(QString(IDS_ERR_SUBPROGRAM_RETURN_CODE)
 										   .arg(QEMU_IMG).arg(args.join(" ")).arg(ret));
@@ -255,7 +255,7 @@ Expected<void> Unit::deleteSnapshot(const QString &id, const CallAdapter &adapte
 	QStringList args;
 	args << "snapshot" << "-d" << id << m_diskPath;
 	int ret;
-	if ((ret = adapter.run(QEMU_IMG, args, NULL, NULL)))
+	if ((ret = adapter.run(QEMU_IMG, args)))
 	{
 		return Expected<void>::fromMessage(QString(IDS_ERR_SUBPROGRAM_RETURN_CODE)
 										   .arg(QEMU_IMG).arg(args.join(" ")).arg(ret));

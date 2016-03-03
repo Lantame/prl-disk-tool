@@ -68,7 +68,7 @@ Expected<Config> Config::create(const QString &config, const QString &group)
 	file.close();
 	QStringList args = QStringList() << file.fileName() << group;
 	QByteArray out;
-	ret = run_prg(PARSER, args, &out, NULL);
+	ret = run_prg(PARSER, args, &out);
 	if (ret)
 		return Expected<Config>::fromMessage("Unable to parse config file");
 	return parseOutput(out);

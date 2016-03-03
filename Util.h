@@ -63,7 +63,12 @@ extern const char QEMU_IMG[];
 extern const char DISK_FORMAT[];
 extern const char DESCRIPTOR[];
 
-int run_prg(const char *name, const QStringList &lstArgs, QByteArray *out, QByteArray *err, const Abort::token_type &token = Abort::token_type());
+enum {CMD_WORK_TIMEOUT = 60 * 60};
+
+int run_prg(const char *name, const QStringList &lstArgs,
+            QByteArray *out = NULL, QByteArray *err = NULL,
+            unsigned timeout = CMD_WORK_TIMEOUT,
+            const Abort::token_type &token = Abort::token_type());
 
 ////////////////////////////////////////////////////////////
 // Logger
@@ -120,9 +125,10 @@ struct Call
 		return QFile::remove(name);
 	}
 
-	int run(const char *name, const QStringList &lstArgs, QByteArray *out, QByteArray *err) const
+	int run(const char *name, const QStringList &lstArgs,
+	        QByteArray *out, QByteArray *err, unsigned timeout) const
 	{
-		return run_prg(name, lstArgs, out, err, m_token);
+		return run_prg(name, lstArgs, out, err, timeout, m_token);
 	}
 
 private:
@@ -151,10 +157,13 @@ struct CallAdapter
 		return !(bool)m_call || m_call->remove(name);
 	}
 
-	int run(const char *name, const QStringList &lstArgs, QByteArray *out, QByteArray *err) const
+	int run(const char *name, const QStringList &lstArgs,
+	        QByteArray *out = NULL, QByteArray *err = NULL,
+	        unsigned timeout = CMD_WORK_TIMEOUT) const
 	{
-		Logger::info(QString("%1 %2").arg(name).arg(lstArgs.join(" ")));
-		return (bool)m_call ? m_call->run(name, lstArgs, out, err) : 0;
+		Logger::info(QString("%1 %2 (timeout %3)")
+		             .arg(name).arg(lstArgs.join(" ")).arg(timeout));
+		return (bool)m_call ? m_call->run(name, lstArgs, out, err, timeout) : 0;
 	}
 
 	int execvp(const char *name, char * const *args) const

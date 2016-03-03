@@ -80,7 +80,7 @@ struct Ploop
 		QByteArray out;
 
 		QStringList args = QStringList() << "info" << "-d" << "-s" << descriptor;
-		int ret = m_adapter.run(PLOOP, args, &out, NULL);
+		int ret = m_adapter.run(PLOOP, args, &out);
 		if (ret)
 		{
 			return Expected<Info>::fromMessage(
@@ -115,7 +115,7 @@ struct Ploop
 	Expected<void> mount(const QString &descriptor) const
 	{
 		QStringList args = QStringList() << "mount" << descriptor;
-		int ret = m_adapter.run(PLOOP, args, NULL, NULL);
+		int ret = m_adapter.run(PLOOP, args);
 		if (ret)
 		{
 			return Expected<void>::fromMessage(
@@ -127,7 +127,7 @@ struct Ploop
 	Expected<void> umount(const QString &descriptor) const
 	{
 		QStringList args = QStringList() << "umount" << descriptor;
-		int ret = m_adapter.run(PLOOP, args, NULL, NULL);
+		int ret = m_adapter.run(PLOOP, args);
 		if (ret)
 		{
 			return Expected<void>::fromMessage(
@@ -140,7 +140,7 @@ struct Ploop
 	{
 		QByteArray out;
 		QStringList args = QStringList() << "-P" << "-f" << partition;
-		int ret = m_adapter.run(RESIZE2FS, args, &out, NULL);
+		int ret = m_adapter.run(RESIZE2FS, args, &out);
 		if (ret)
 		{
 			return Expected<quint64>::fromMessage(

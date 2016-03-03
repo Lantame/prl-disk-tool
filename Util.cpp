@@ -43,7 +43,7 @@ bool Logger::s_verbose = false;
 
 namespace
 {
-enum {CMD_WORK_STEPS = 60 * 60, CMD_WORK_STEP_TIME = 1000};
+enum {CMD_WORK_STEP_TIME = 1000};
 
 class IndependentProcess: public QProcess
 {
@@ -61,13 +61,15 @@ protected:
 }
 
 
-int run_prg(const char *name, const QStringList &lstArgs, QByteArray *out, QByteArray *err, const Abort::token_type &token)
+int run_prg(const char *name, const QStringList &lstArgs,
+            QByteArray *out, QByteArray *err, unsigned timeout,
+            const Abort::token_type &token)
 {
 	IndependentProcess proc;
 	proc.start(name, lstArgs);
 
-	int step;
-	for (step = 0; step < CMD_WORK_STEPS; ++step)
+	unsigned step;
+	for (step = 0; step < timeout; ++step)
 	{
 		if (proc.waitForFinished(CMD_WORK_STEP_TIME))
 			break;
@@ -81,7 +83,7 @@ int run_prg(const char *name, const QStringList &lstArgs, QByteArray *out, QByte
 		}
 	}
 
-	if (step >= CMD_WORK_STEPS)
+	if (step >= timeout)
 	{
 		fprintf(stderr, "%s tool not responding. Terminate it now.", name);
 		proc.kill();
