@@ -973,7 +973,7 @@ Expected<void> Consider::Expand::checkSpace(
 {
 	quint64 avail = getAvailableSpace(image.getFilename());
 	// Heuristic estimates: we only spend space for filesystem expanding.
-	const double FS_OVERHEAD = 0.05;
+	const double FS_OVERHEAD = 0.02;
 	quint64 resultSize = (convertMbToBytes(sizeMb)) * FS_OVERHEAD;
 	if (resultSize > avail)
 	{
