@@ -215,17 +215,11 @@ template<> void FillResize::operator() (const Swap &fs)
 	m_resize.resizeForce(m_name, m_newSize);
 }
 
-template<> void FillResize::operator() (const Ntfs &fs)
-{
-	Q_UNUSED(fs);
-	m_resize.shrink(m_name);
-	m_resize.noExpandContent();
-}
-
 template <class T> void FillResize::operator() (const T &fs)
 {
 	Q_UNUSED(fs);
 	m_resize.shrink(m_name);
+	m_resize.noExpandContent();
 }
 
 } // namespace Visitor

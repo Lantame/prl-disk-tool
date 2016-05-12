@@ -40,6 +40,7 @@ namespace
 
 const char GUESTFS_DEVICE[] = "/dev/sda";
 
+enum {MAX_MEMORY_SIZE = 8192};
 enum {MAX_BOOTLOADER_SECTS = 4096};
 enum {GPT_START_SECTS = 64};
 enum {GPT_END_SECTS = 64};
@@ -1259,6 +1260,8 @@ Wrapper::create(const QString& filename, const boost::optional<Action> &gfsActio
 		return Expected<Wrapper>::fromMessage("Unable to create guestfs handle");
 	if (guestfs_add_drive(g.get(), QSTR2UTF8(filename)))
 		return Expected<Wrapper>::fromMessage("Unable to add drive");
+	if (guestfs_set_memsize(g.get(), MAX_MEMORY_SIZE))
+		return Expected<Wrapper>::fromMessage("Unable to set max memory");
 	if (guestfs_launch(g.get()))
 		return Expected<Wrapper>::fromMessage("Unable to launch guestfs");
 
@@ -1273,6 +1276,8 @@ Wrapper::createReadOnly(const QString& filename, const boost::optional<Action> &
 		return Expected<Wrapper>::fromMessage("Unable to create guestfs handle");
 	if (guestfs_add_drive_ro(g.get(), QSTR2UTF8(filename)))
 		return Expected<Wrapper>::fromMessage("Unable to add drive");
+	if (guestfs_set_memsize(g.get(), MAX_MEMORY_SIZE))
+		return Expected<Wrapper>::fromMessage("Unable to set max memory");
 	if (guestfs_launch(g.get()))
 		return Expected<Wrapper>::fromMessage("Unable to launch guestfs");
 
