@@ -162,6 +162,13 @@ private:
 };
 
 ////////////////////////////////////////////////////////////
+// Fat
+
+struct Fat
+{
+};
+
+////////////////////////////////////////////////////////////
 // Btrfs
 
 struct Btrfs
@@ -302,6 +309,7 @@ typedef boost::variant<
 	Unknown,
 	Ext,
 	Ntfs,
+	Fat,
 	Btrfs,
 	Xfs,
 	Swap,

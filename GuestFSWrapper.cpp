@@ -109,6 +109,8 @@ GuestFS::fs_type parseFilesystem(const QString &fs)
 		return GuestFS::fs_type(GuestFS::Ext());
 	else if (fs == "ntfs")
 		return GuestFS::fs_type(GuestFS::Ntfs());
+	else if (fs.startsWith("fat") || fs == "vfat")
+		return GuestFS::fs_type(GuestFS::Fat());
 	else if (fs == "btrfs")
 		return GuestFS::fs_type(GuestFS::Btrfs());
 	else if (fs == "xfs")
@@ -179,6 +181,13 @@ template<> Expected<quint64> MinSize::operator() (const Swap &fs) const
 }
 
 template<> Expected<quint64> MinSize::operator() (const Unknown &fs) const
+{
+	Q_UNUSED(fs);
+	return Expected<quint64>::fromMessage(
+			QString(IDS_ERR_FS_UNSUPPORTED), ERR_UNSUPPORTED_FS);
+}
+
+template<> Expected<quint64> MinSize::operator() (const Fat &fs) const
 {
 	Q_UNUSED(fs);
 	return Expected<quint64>::fromMessage(

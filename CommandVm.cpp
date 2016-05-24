@@ -1196,8 +1196,30 @@ Expected<void> Compact::execute() const
 	if (!hddGuard.isOk())
 		return hddGuard;
 	CallAdapter adapter(m_call);
+
 	QStringList args;
 	args << "--machine-readable" << "--in-place" << getDiskPath();
+
+	Expected<Wrapper> gfsRes = Wrapper::createReadOnly(getDiskPath());
+	if (!gfsRes.isOk())
+		return gfsRes;
+	const Wrapper& gfs = gfsRes.get();
+
+	// Something possibly mountable.
+	Expected<QMap<QString, fs_type> > filesystems =
+		gfs.getPartitionList().getFilesystems();
+	if (!filesystems.isOk())
+		return filesystems;
+	Q_FOREACH(const QString& device, filesystems.get().keys())
+	{
+		Expected<Partition::Unit> unit = gfs.getPartitionList().createUnit(device);
+		if (!unit.isOk())
+			return unit;
+		// virt-sparsify fails on FAT because fstrim() is unimplemented
+		if (unit.get().getFilesystem<Fat>() != NULL)
+			args << "--ignore" << device;
+	}
+
 	int ret = adapter.run(VIRT_SPARSIFY, args);
 	if (ret)
 	{
@@ -1242,7 +1264,8 @@ Expected<void> CompactInfo::execute() const
 		Expected<Partition::Unit> unit = gfs.getPartitionList().createUnit(device);
 		if (!unit.isOk())
 			return unit;
-		if (unit.get().getFilesystem<Unknown>() != NULL)
+		if (unit.get().getFilesystem<Unknown>() != NULL ||
+			unit.get().getFilesystem<Fat>() != NULL)
 			continue;
 		quint64 deviceFree;
 		if (unit.get().getFilesystem<Swap>() != NULL)
