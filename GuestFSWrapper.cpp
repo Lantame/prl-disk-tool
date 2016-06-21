@@ -1349,7 +1349,7 @@ Expected<quint64> Wrapper::getVirtResizeOverhead() const
 	Expected<int> partCount = m_partList->getCount();
 	if (!partCount.isOk())
 		return partCount;
-	quint64 alignmentSects = (partCount.get() + 1) * ALIGNMENT_SECTS;
+	quint64 alignmentSects = (partCount.get() + 1) * (quint64)ALIGNMENT_SECTS;
 	quint64 overhead = startOverheadSects + alignmentSects + GPT_END_SECTS;
 	return ceilToMb(overhead * sectorSize.get());
 }

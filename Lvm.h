@@ -44,10 +44,6 @@ namespace Lvm
 
 struct Group
 {
-	Group()
-	{
-	}
-
 	Group(QString name, quint64 extentSize, const QString &attributes):
 		m_name(name), m_extentSize(extentSize), m_attributes(attributes)
 	{
@@ -228,7 +224,7 @@ private:
 	{
 	}
 
-	static Config parseOutput(const QByteArray &out);
+	static Expected<Config> parseOutput(const QByteArray &out);
 
 	Group m_group;
 	QList<Segment> m_segments;

@@ -31,6 +31,7 @@
 #include <QTemporaryFile>
 #include <QSet>
 #include <QFileInfo>
+#include <boost/optional.hpp>
 
 #include "Lvm.h"
 #include "Util.h"
@@ -93,7 +94,7 @@ QStringList Config::getPhysicals() const
 	return result.toList();
 }
 
-Config Config::parseOutput(const QByteArray &out)
+Expected<Config> Config::parseOutput(const QByteArray &out)
 {
 	// VG and LV identifiers may contain only symbols from [a-zA-Z0-9._+-].
 	// Thus using spaces as separators is safe.
@@ -104,7 +105,7 @@ Config Config::parseOutput(const QByteArray &out)
 
 	QStringList lines = QString(out).split('\n', QString::SkipEmptyParts);
 	QList<Segment> segments;
-	Group group;
+	boost::optional<Group> group;
 	Q_FOREACH(const QString &line, lines)
 	{
 		if (segmentRE.indexIn(line) != -1)
@@ -131,5 +132,8 @@ Config Config::parseOutput(const QByteArray &out)
 		}
 	}
 
-	return Config(group, segments);
+	if (!group)
+		return Expected<Config>::fromMessage("No LVM group found");
+
+	return Config(*group, segments);
 }

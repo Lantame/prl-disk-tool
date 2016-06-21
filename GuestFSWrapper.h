@@ -122,7 +122,7 @@ struct Action
 
 struct Ext
 {
-	Ext()
+	Ext(): m_g(NULL)
 	{
 	}
 
@@ -144,7 +144,7 @@ private:
 
 struct Ntfs
 {
-	Ntfs()
+	Ntfs(): m_g(NULL)
 	{
 	}
 
@@ -173,7 +173,7 @@ struct Fat
 
 struct Btrfs
 {
-	Btrfs()
+	Btrfs(): m_g(NULL)
 	{
 	}
 
@@ -195,7 +195,7 @@ private:
 
 struct Xfs
 {
-	Xfs()
+	Xfs(): m_g(NULL)
 	{
 	}
 
@@ -267,7 +267,7 @@ private:
 struct Physical
 {
 	explicit Physical(const Lvm::Physical &physical):
-		m_physical(physical)
+		m_physical(physical), m_g(NULL)
 	{
 	}
 
