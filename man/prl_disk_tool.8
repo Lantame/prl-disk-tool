@@ -26,7 +26,7 @@ The prl_disk_tool utility is used to manage virtual disks.
 Changes the capacity of the specified virtual disk. During resizing, all data present on the disk volumes are left intact.
 You can also resize the last partition using the \fB\-\-resize_partition\fP option. The supported file systems are NTFS, ext2/ext3/ext4, btrfs, xfs.
 .IP \fBcompact\fP 4
-Removes all empty blocks from expanding virtual disks and reduces their size on your real disk.
+Removes all empty blocks from virtual disks and reduces their size on your real disk.
 Compacting is performed by scanning file systems for unused clusters,
 zeroing and discarding corresponding disk blocks. The supported file systems are NTFS, ext2/ext3/ext4, btrfs, xfs.
 .IP \fBmerge\fP 4
@@ -75,8 +75,8 @@ resizing the disk. The information is shown as a table with the following column
 \fBMinimum:             <size>M  (without resizing the last partition)\fP
        The minimum possible capacity of the virtual disk after resizing the disk without using the \fB\-\-resize_partition\fP option.
 
-Keep in mind that for an expanding virtual disk the capacity shown from inside the virtual machine and the
-size the disk occupies on the real physical disk may differ.
+Keep in mind that the capacity of a virtual disk shown from inside the virtual machine and the
+size the virtual disk occupies on the physical disk may differ.
 .TP
 \fB\-\-units\fP <\fIK\fP|\fIM\fP|\fIG\fP|\fIT\fP>
 Used with the \fB\-\-info\fP option, shows the disk size in KB, MB, GB or TB.
